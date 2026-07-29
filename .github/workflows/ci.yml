@@ -18,5 +18,17 @@ jobs:
           cache: true
       - run: go mod download
       - run: go vet ./...
-      - run: go test -race -coverprofile=coverage.out ./...
+      - name: Test internal packages with coverage
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./internal/...
+      - name: Enforce internal coverage threshold
+        shell: bash
+        run: |
+          coverage="$(go tool cover -func coverage.out | awk '/^total:/ {gsub(/%/, "", $3); print $3}')"
+          echo "Internal package coverage: ${coverage}%"
+          awk -v coverage="${coverage}" 'BEGIN {
+            if (coverage <= 75) {
+              printf "Coverage %.1f%% must be greater than 75%%\n", coverage
+              exit 1
+            }
+          }'
       - run: go build ./cmd/gateway
