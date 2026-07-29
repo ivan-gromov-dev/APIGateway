@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"log/slog"
@@ -8,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/Djunichi/APIGateway/internal/balancer"
 	"github.com/Djunichi/APIGateway/internal/config"
@@ -26,7 +28,7 @@ func TestHandlerProxiesAndStripsPrefix(t *testing.T) {
 		PathPrefix:  "/api/",
 		Upstreams:   []string{upstream.URL},
 		StripPrefix: true,
-	}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}}, testRetry(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +55,7 @@ func TestHandlerBalancesRequestsAcrossUpstreams(t *testing.T) {
 	handler, err := Handler([]config.Route{{
 		PathPrefix: "/api/",
 		Upstreams:  []string{first.URL, second.URL, third.URL},
-	}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}}, testRetry(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,9 +70,88 @@ func TestHandlerBalancesRequestsAcrossUpstreams(t *testing.T) {
 	}
 }
 
+func TestHandlerRetriesSafeReplayableRequestOnConfiguredStatus(t *testing.T) {
+	firstCalls, secondCalls := 0, 0
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		firstCalls++
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer first.Close()
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		secondCalls++
+		_, _ = w.Write([]byte("recovered"))
+	}))
+	defer second.Close()
+
+	retry := testRetry()
+	retry.MaxAttempts = 2
+	handler, err := Handler([]config.Route{{
+		PathPrefix: "/api/", Upstreams: []string{first.URL, second.URL},
+	}}, retry, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/resource", nil))
+
+	if response.Code != http.StatusOK || response.Body.String() != "recovered" {
+		t.Fatalf("response = %d %q", response.Code, response.Body.String())
+	}
+	if firstCalls != 1 || secondCalls != 1 {
+		t.Fatalf("calls = first:%d second:%d, want 1 each", firstCalls, secondCalls)
+	}
+}
+
+func TestHandlerDoesNotRetryUnsafeOrNonReplayableRequest(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		body   io.Reader
+	}{
+		{name: "unsafe method", method: http.MethodPost},
+		{name: "non-replayable body", method: http.MethodGet, body: bytes.NewBufferString("payload")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			firstCalls, secondCalls := 0, 0
+			first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				firstCalls++
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			}))
+			defer first.Close()
+			second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				secondCalls++
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer second.Close()
+
+			retry := testRetry()
+			retry.MaxAttempts = 2
+			handler, err := Handler([]config.Route{{
+				PathPrefix: "/api/", Upstreams: []string{first.URL, second.URL},
+			}}, retry, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(test.method, "/api/resource", test.body)
+			request.GetBody = nil
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+
+			if response.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want 503", response.Code)
+			}
+			if firstCalls != 1 || secondCalls != 0 {
+				t.Fatalf("calls = first:%d second:%d, want 1 and 0", firstCalls, secondCalls)
+			}
+		})
+	}
+}
+
 func TestHandlerRejectsRouteWithoutUpstreams(t *testing.T) {
 	_, err := Handler(
 		[]config.Route{{PathPrefix: "/api/"}},
+		testRetry(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 	if err == nil {
@@ -101,6 +182,7 @@ func TestHandlerWithBalancerUsesInjectedImplementation(t *testing.T) {
 			PathPrefix: "/api/",
 			Upstreams:  []string{"http://unused-1.example", "http://unused-2.example"},
 		}},
+		testRetry(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		factory,
 	)
@@ -122,20 +204,27 @@ func TestHandlerWithBalancerRejectsInvalidFactory(t *testing.T) {
 	route := []config.Route{{PathPrefix: "/api/", Upstreams: []string{"http://upstream.example"}}}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	if _, err := HandlerWithBalancer(route, logger, nil); err == nil {
+	if _, err := HandlerWithBalancer(route, testRetry(), logger, nil); err == nil {
 		t.Fatal("expected an error for a nil factory")
 	}
 	failingFactory := func([]*url.URL) (balancer.Balancer, error) {
 		return nil, errors.New("factory failed")
 	}
-	if _, err := HandlerWithBalancer(route, logger, failingFactory); err == nil {
+	if _, err := HandlerWithBalancer(route, testRetry(), logger, failingFactory); err == nil {
 		t.Fatal("expected the factory error")
 	}
 	nilFactory := func([]*url.URL) (balancer.Balancer, error) {
 		return nil, nil
 	}
-	if _, err := HandlerWithBalancer(route, logger, nilFactory); err == nil {
+	if _, err := HandlerWithBalancer(route, testRetry(), logger, nilFactory); err == nil {
 		t.Fatal("expected an error for a nil balancer")
+	}
+}
+
+func testRetry() config.Retry {
+	return config.Retry{
+		MaxAttempts: 1, PerAttemptTimeout: time.Second,
+		Statuses: []int{http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout},
 	}
 }
 

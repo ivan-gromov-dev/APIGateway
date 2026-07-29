@@ -13,8 +13,8 @@ import (
 	"github.com/Djunichi/APIGateway/internal/config"
 )
 
-func Handler(routes []config.Route, logger *slog.Logger) (http.Handler, error) {
-	return HandlerWithBalancer(routes, logger, func(upstreams []*url.URL) (balancer.Balancer, error) {
+func Handler(routes []config.Route, retry config.Retry, logger *slog.Logger) (http.Handler, error) {
+	return HandlerWithBalancer(routes, retry, logger, func(upstreams []*url.URL) (balancer.Balancer, error) {
 		return balancer.NewRoundRobin(upstreams)
 	})
 }
@@ -23,6 +23,7 @@ func Handler(routes []config.Route, logger *slog.Logger) (http.Handler, error) {
 // every configured route.
 func HandlerWithBalancer(
 	routes []config.Route,
+	retry config.Retry,
 	logger *slog.Logger,
 	newBalancer balancer.Factory,
 ) (http.Handler, error) {
@@ -48,9 +49,9 @@ func HandlerWithBalancer(
 		}
 		proxy := &httputil.ReverseProxy{
 			Rewrite: func(request *httputil.ProxyRequest) {
-				request.SetURL(routeBalancer.Next())
 				request.SetXForwarded()
 			},
+			Transport: newRetryTransport(http.DefaultTransport, routeBalancer, retry),
 		}
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			logger.Error("upstream request failed", "error", err, "request_id", r.Header.Get("X-Request-ID"))

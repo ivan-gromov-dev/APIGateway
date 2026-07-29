@@ -20,8 +20,27 @@ import (
 type Option func(*settings)
 
 type settings struct {
-	users   int
-	billing bool
+	users        int
+	billing      bool
+	retry        config.Retry
+	userStatuses map[int][]int
+}
+
+// WithRetry configures the gateway retry policy.
+func WithRetry(retry config.Retry) Option {
+	return func(settings *settings) {
+		settings.retry = retry
+	}
+}
+
+// WithUserStatuses configures successive statuses for a users-service instance.
+func WithUserStatuses(instance int, statuses ...int) Option {
+	return func(settings *settings) {
+		if settings.userStatuses == nil {
+			settings.userStatuses = make(map[int][]int)
+		}
+		settings.userStatuses[instance] = append([]int(nil), statuses...)
+	}
 }
 
 // WithUsers adds the requested number of users-service upstream instances.
@@ -76,7 +95,8 @@ func New(t testing.TB, options ...Option) *Environment {
 	if cfg.users > 0 {
 		upstreams := make([]string, 0, cfg.users)
 		for i := 1; i <= cfg.users; i++ {
-			upstreams = append(upstreams, newUpstream(t, fmt.Sprintf("users-%d", i)).URL())
+			upstream := newUpstreamWithStatuses(t, fmt.Sprintf("users-%d", i), cfg.userStatuses[i]...)
+			upstreams = append(upstreams, upstream.URL())
 		}
 		routes = append(routes, config.Route{
 			PathPrefix:  "/api/",
@@ -105,6 +125,7 @@ func New(t testing.TB, options ...Option) *Environment {
 		Middleware: config.Middleware{
 			RequestTimeout: time.Second,
 		},
+		Retry:  cfg.retry,
 		Routes: routes,
 	}
 

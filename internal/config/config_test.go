@@ -40,6 +40,7 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 		"server":     "server:\n  unknown: true\n",
 		"middleware": "middleware:\n  unknown: true\n",
 		"cors":       "middleware:\n  cors:\n    unknown: true\n",
+		"retry":      "retry:\n  unknown: true\n",
 		"route":      "routes:\n  - path_prefix: /api/\n    upstreams: [http://localhost:8081]\n    unknown: true\n",
 	}
 	for name, fragment := range tests {
@@ -77,6 +78,13 @@ func TestValidateRuntimeSettings(t *testing.T) {
 		"empty upstreams":  func(cfg *Config) { cfg.Routes[0].Upstreams = nil },
 		"duplicate": func(cfg *Config) {
 			cfg.Routes[0].Upstreams = []string{"http://localhost:8081", "http://localhost:8081"}
+		},
+		"retry attempts": func(cfg *Config) { cfg.Retry.MaxAttempts = 0 },
+		"retry timeout":  func(cfg *Config) { cfg.Retry.PerAttemptTimeout = 0 },
+		"retry backoff":  func(cfg *Config) { cfg.Retry.Backoff = -1 },
+		"retry statuses": func(cfg *Config) { cfg.Retry.Statuses = []int{429} },
+		"duplicate retry status": func(cfg *Config) {
+			cfg.Retry.Statuses = []int{503, 503}
 		},
 	}
 	for name, mutate := range tests {

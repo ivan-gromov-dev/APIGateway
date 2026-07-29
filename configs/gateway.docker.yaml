@@ -17,6 +17,11 @@ middleware:
     allowed_origins: ["*"]
     allowed_methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
     allowed_headers: [Accept, Authorization, Content-Type, X-Request-ID]
+retry:
+  max_attempts: 3
+  per_attempt_timeout: 2s
+  backoff: 25ms
+  statuses: [502, 503, 504]
 routes:
   - path_prefix: /api/billing/
     upstreams:
