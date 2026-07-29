@@ -4,9 +4,13 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/pprof"
+	"sync"
+	"sync/atomic"
 
 	"github.com/Djunichi/APIGateway/internal/config"
 	"github.com/Djunichi/APIGateway/internal/metrics"
@@ -17,6 +21,7 @@ import (
 type Server struct {
 	cfg    config.Config
 	logger *slog.Logger
+	ready  atomic.Bool
 }
 
 func New(cfg config.Config, logger *slog.Logger) *Server {
@@ -39,23 +44,44 @@ func (s *Server) Run(ctx context.Context) error {
 	)
 
 	app := httpServer(s.cfg.Server, handler)
-	admin := httpServer(s.cfg.Admin, adminHandler(collector))
-	errs := make(chan error, 2)
-	go serve(app, errs)
-	go serve(admin, errs)
+	admin := httpServer(s.cfg.Admin, adminHandler(collector, &s.ready))
 
+	appListener, err := net.Listen("tcp", app.Addr)
+	if err != nil {
+		return fmt.Errorf("listen on public address %s: %w", app.Addr, err)
+	}
+	adminListener, err := net.Listen("tcp", admin.Addr)
+	if err != nil {
+		_ = appListener.Close()
+		return fmt.Errorf("listen on admin address %s: %w", admin.Addr, err)
+	}
+
+	results := make(chan error, 2)
+	s.ready.Store(true)
+	go serve("public", app, appListener, results)
+	go serve("admin", admin, adminListener, results)
+
+	var runErr error
+	completed := 0
 	select {
 	case <-ctx.Done():
-	case err := <-errs:
-		return err
+	case runErr = <-results:
+		completed = 1
 	}
 
+	s.ready.Store(false)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.Server.ShutdownTimeout)
 	defer cancel()
-	if err := app.Shutdown(shutdownCtx); err != nil {
-		return err
+	shutdownErr := shutdownAll(shutdownCtx, app, admin)
+
+	for completed < 2 {
+		if err := <-results; err != nil && runErr == nil {
+			runErr = err
+		}
+		completed++
 	}
-	return admin.Shutdown(shutdownCtx)
+
+	return errors.Join(runErr, shutdownErr)
 }
 
 func httpServer(cfg config.HTTPServer, handler http.Handler) *http.Server {
@@ -65,16 +91,35 @@ func httpServer(cfg config.HTTPServer, handler http.Handler) *http.Server {
 	}
 }
 
-func serve(server *http.Server, errs chan<- error) {
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		errs <- err
+func serve(name string, server *http.Server, listener net.Listener, results chan<- error) {
+	err := server.Serve(listener)
+	if errors.Is(err, http.ErrServerClosed) {
+		err = nil
 	}
+	if err != nil {
+		err = fmt.Errorf("%s server: %w", name, err)
+	}
+	results <- err
 }
 
-func adminHandler(collector *metrics.Collector) http.Handler {
+func shutdownAll(ctx context.Context, servers ...*http.Server) error {
+	errs := make([]error, len(servers))
+	var wg sync.WaitGroup
+	wg.Add(len(servers))
+	for i, server := range servers {
+		go func() {
+			defer wg.Done()
+			errs[i] = server.Shutdown(ctx)
+		}()
+	}
+	wg.Wait()
+	return errors.Join(errs...)
+}
+
+func adminHandler(collector *metrics.Collector, ready *atomic.Bool) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", ok)
-	mux.HandleFunc("GET /readyz", ok)
+	mux.HandleFunc("GET /readyz", readinessHandler(ready))
 	mux.Handle("GET /metrics", collector)
 	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
 	mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
@@ -84,8 +129,22 @@ func adminHandler(collector *metrics.Collector) http.Handler {
 	return mux
 }
 
+func readinessHandler(ready *atomic.Bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		if !ready.Load() {
+			writeStatus(w, http.StatusServiceUnavailable, "not_ready")
+			return
+		}
+		writeStatus(w, http.StatusOK, "ready")
+	}
+}
+
 func ok(w http.ResponseWriter, _ *http.Request) {
+	writeStatus(w, http.StatusOK, "ok")
+}
+
+func writeStatus(w http.ResponseWriter, status int, value string) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"status":"ok"}`))
+	w.WriteHeader(status)
+	_, _ = fmt.Fprintf(w, `{"status":%q}`, value)
 }

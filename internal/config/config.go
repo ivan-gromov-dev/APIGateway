@@ -2,8 +2,12 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -43,6 +47,14 @@ type CORS struct {
 	AllowedHeaders []string `yaml:"allowed_headers"`
 }
 
+func (c *CORS) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "allowed_origins", "allowed_methods", "allowed_headers"); err != nil {
+		return err
+	}
+	type plain CORS
+	return value.Decode((*plain)(c))
+}
+
 type Route struct {
 	PathPrefix  string `yaml:"path_prefix"`
 	Upstream    string `yaml:"upstream"`
@@ -55,10 +67,21 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, err
 	}
-	applyEnvironment(&cfg)
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return Config{}, errors.New("configuration must contain exactly one YAML document")
+		}
+		return Config{}, err
+	}
+	if err := applyEnvironment(&cfg); err != nil {
+		return Config{}, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -92,6 +115,25 @@ func (c Config) Validate() error {
 	if c.Server.Address == c.Admin.Address {
 		return errors.New("server and admin addresses must differ")
 	}
+	if c.Server.ShutdownTimeout <= 0 {
+		return errors.New("server shutdown_timeout must be positive")
+	}
+	if c.Server.ReadTimeout < 0 || c.Server.WriteTimeout < 0 || c.Server.IdleTimeout < 0 {
+		return errors.New("server timeouts must not be negative")
+	}
+	if c.Admin.ReadTimeout < 0 || c.Admin.WriteTimeout < 0 || c.Admin.IdleTimeout < 0 {
+		return errors.New("admin timeouts must not be negative")
+	}
+	if c.Middleware.RequestTimeout < 0 {
+		return errors.New("middleware request_timeout must not be negative")
+	}
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(c.Log.Level)); err != nil {
+		return fmt.Errorf("log level %q: %w", c.Log.Level, err)
+	}
+	if c.Log.Format != "json" && c.Log.Format != "text" {
+		return fmt.Errorf("log format must be json or text, got %q", c.Log.Format)
+	}
 	if len(c.Routes) == 0 {
 		return errors.New("at least one route is required")
 	}
@@ -104,23 +146,32 @@ func (c Config) Validate() error {
 			return fmt.Errorf("route %d: duplicate path_prefix %q", i, route.PathPrefix)
 		}
 		seen[route.PathPrefix] = struct{}{}
-		if !strings.HasPrefix(route.Upstream, "http://") && !strings.HasPrefix(route.Upstream, "https://") {
+		upstream, err := url.Parse(route.Upstream)
+		if err != nil || (upstream.Scheme != "http" && upstream.Scheme != "https") || upstream.Host == "" {
 			return fmt.Errorf("route %d: upstream must use http or https", i)
 		}
 	}
 	return nil
 }
 
-func applyEnvironment(c *Config) {
+func applyEnvironment(c *Config) error {
 	setString("GATEWAY_SERVER_ADDRESS", &c.Server.Address)
 	setString("GATEWAY_ADMIN_ADDRESS", &c.Admin.Address)
 	setString("GATEWAY_LOG_LEVEL", &c.Log.Level)
 	setString("GATEWAY_LOG_FORMAT", &c.Log.Format)
-	setDuration("GATEWAY_SERVER_READ_TIMEOUT", &c.Server.ReadTimeout)
-	setDuration("GATEWAY_SERVER_WRITE_TIMEOUT", &c.Server.WriteTimeout)
-	setDuration("GATEWAY_SERVER_IDLE_TIMEOUT", &c.Server.IdleTimeout)
-	setDuration("GATEWAY_SERVER_SHUTDOWN_TIMEOUT", &c.Server.ShutdownTimeout)
-	setDuration("GATEWAY_MIDDLEWARE_REQUEST_TIMEOUT", &c.Middleware.RequestTimeout)
+	durations := map[string]*time.Duration{
+		"GATEWAY_SERVER_READ_TIMEOUT":        &c.Server.ReadTimeout,
+		"GATEWAY_SERVER_WRITE_TIMEOUT":       &c.Server.WriteTimeout,
+		"GATEWAY_SERVER_IDLE_TIMEOUT":        &c.Server.IdleTimeout,
+		"GATEWAY_SERVER_SHUTDOWN_TIMEOUT":    &c.Server.ShutdownTimeout,
+		"GATEWAY_MIDDLEWARE_REQUEST_TIMEOUT": &c.Middleware.RequestTimeout,
+	}
+	for key, target := range durations {
+		if err := setDuration(key, target); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func setString(key string, target *string) {
@@ -129,15 +180,21 @@ func setString(key string, target *string) {
 	}
 }
 
-func setDuration(key string, target *time.Duration) {
+func setDuration(key string, target *time.Duration) error {
 	if value, ok := os.LookupEnv(key); ok {
-		if parsed, err := time.ParseDuration(value); err == nil {
-			*target = parsed
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
 		}
+		*target = parsed
 	}
+	return nil
 }
 
 func (d *HTTPServer) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "address", "read_timeout", "write_timeout", "idle_timeout", "shutdown_timeout"); err != nil {
+		return err
+	}
 	type plain struct {
 		Address         string `yaml:"address"`
 		ReadTimeout     string `yaml:"read_timeout"`
@@ -162,6 +219,9 @@ func (d *HTTPServer) UnmarshalYAML(value *yaml.Node) error {
 }
 
 func (m *Middleware) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "request_timeout", "cors"); err != nil {
+		return err
+	}
 	type plain struct {
 		RequestTimeout string `yaml:"request_timeout"`
 		CORS           CORS   `yaml:"cors"`
@@ -179,6 +239,23 @@ func (m *Middleware) UnmarshalYAML(value *yaml.Node) error {
 		return fmt.Errorf("request_timeout: %w", err)
 	}
 	m.RequestTimeout = duration
+	return nil
+}
+
+func rejectUnknownFields(value *yaml.Node, allowed ...string) error {
+	if value.Kind != yaml.MappingNode {
+		return errors.New("expected a YAML mapping")
+	}
+	known := make(map[string]struct{}, len(allowed))
+	for _, field := range allowed {
+		known[field] = struct{}{}
+	}
+	for i := 0; i < len(value.Content); i += 2 {
+		field := value.Content[i]
+		if _, ok := known[field.Value]; !ok {
+			return fmt.Errorf("line %d: field %s not found", field.Line, field.Value)
+		}
+	}
 	return nil
 }
 
