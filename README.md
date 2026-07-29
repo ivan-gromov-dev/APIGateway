@@ -203,6 +203,45 @@ GitHub Actions runs three independent jobs in parallel:
 | `unit-tests` | Runs `go vet`, race-enabled unit tests, and per-package coverage gates |
 | `integration-tests` | Runs the real-network integration suite with the race detector |
 
+## AI agent harness
+
+Repository-level instructions for coding agents are defined in
+[`AGENTS.md`](AGENTS.md). More specific rules apply under
+[`internal`](internal/AGENTS.md) and
+[`test/integration`](test/integration/AGENTS.md).
+
+Agents and contributors can reproduce the main local quality gate with:
+
+```powershell
+.\scripts\verify.ps1
+```
+
+or:
+
+```bash
+sh scripts/verify.sh
+```
+
+Race detection is optional locally because it requires a working C toolchain:
+
+```powershell
+.\scripts\verify.ps1 -Race
+```
+
+```bash
+RACE=1 sh scripts/verify.sh
+```
+
+Run the project-specific, read-only review skill before opening a PR:
+
+```text
+Use $review-api-gateway to review my current changes.
+```
+
+The skill reads all applicable `AGENTS.md` files, reviews architecture and Go
+semantics, runs relevant non-mutating checks, and reports prioritized findings.
+It is stored in [`.codex/skills/review-api-gateway`](.codex/skills/review-api-gateway).
+
 ## Project layout
 
 ```text
@@ -225,6 +264,8 @@ GitHub Actions runs three independent jobs in parallel:
 │   ├── integration/
 │   │   └── internal/testenv/       shared integration harness
 │   └── load/                       hey and wrk scenarios
+├── scripts/                         cross-platform verification harness
+├── AGENTS.md                        repository instructions for AI agents
 ├── Dockerfile
 ├── docker-compose.yml
 └── Makefile
