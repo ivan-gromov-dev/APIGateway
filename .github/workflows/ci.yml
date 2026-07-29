@@ -18,17 +18,25 @@ jobs:
           cache: true
       - run: go mod download
       - run: go vet ./...
-      - name: Test internal packages with coverage
-        run: go test -race -covermode=atomic -coverprofile=coverage.out ./internal/...
-      - name: Enforce internal coverage threshold
+      - name: Test coverage of each internal package
         shell: bash
         run: |
-          coverage="$(go tool cover -func coverage.out | awk '/^total:/ {gsub(/%/, "", $3); print $3}')"
-          echo "Internal package coverage: ${coverage}%"
-          awk -v coverage="${coverage}" 'BEGIN {
-            if (coverage <= 75) {
-              printf "Coverage %.1f%% must be greater than 75%%\n", coverage
-              exit 1
-            }
-          }'
+          threshold=75
+          failed=0
+          mkdir -p coverage
+
+          while IFS= read -r package; do
+            profile="coverage/$(echo "${package}" | tr '/.' '__').out"
+            go test -race -covermode=atomic -coverprofile="${profile}" "${package}"
+            percentage="$(go tool cover -func "${profile}" | awk '/^total:/ {gsub(/%/, "", $3); print $3}')"
+
+            printf "%-70s %6.1f%%\n" "${package}" "${percentage}"
+            if ! awk -v coverage="${percentage}" -v threshold="${threshold}" \
+              'BEGIN { exit !(coverage > threshold) }'; then
+              echo "::error title=Coverage below threshold::${package} coverage ${percentage}% must be greater than ${threshold}%"
+              failed=1
+            fi
+          done < <(go list ./internal/...)
+
+          exit "${failed}"
       - run: go build ./cmd/gateway
