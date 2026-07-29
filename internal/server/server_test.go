@@ -126,7 +126,7 @@ func testConfig(publicAddress, adminAddress, upstream string) config.Config {
 		Middleware: config.Middleware{
 			RequestTimeout: time.Second,
 		},
-		Routes: []config.Route{{PathPrefix: "/api/", Upstream: upstream}},
+		Routes: []config.Route{{PathPrefix: "/api/", Upstreams: []string{upstream}}},
 	}
 }
 

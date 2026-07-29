@@ -5,10 +5,24 @@ services:
       - "8080:8080"
       - "9090:9090"
     depends_on:
-      - backend
-  backend:
+      - backend-1
+      - backend-2
+      - backend-3
+  backend-1:
     build:
       context: .
       dockerfile: deployments/backend.Dockerfile
     environment:
-      SERVICE_NAME: demo-backend
+      SERVICE_NAME: backend-1
+  backend-2:
+    build:
+      context: .
+      dockerfile: deployments/backend.Dockerfile
+    environment:
+      SERVICE_NAME: backend-2
+  backend-3:
+    build:
+      context: .
+      dockerfile: deployments/backend.Dockerfile
+    environment:
+      SERVICE_NAME: backend-3

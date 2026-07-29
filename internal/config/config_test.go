@@ -10,7 +10,7 @@ import (
 func TestLoad(t *testing.T) {
 	t.Setenv("GATEWAY_SERVER_ADDRESS", ":8888")
 	path := filepath.Join(t.TempDir(), "gateway.yaml")
-	data := []byte("admin:\n  address: ':9090'\nroutes:\n  - path_prefix: /api/\n    upstream: http://localhost:8081\n")
+	data := []byte("admin:\n  address: ':9090'\nroutes:\n  - path_prefix: /api/\n    upstreams: [http://localhost:8081]\n")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestLoad(t *testing.T) {
 
 func TestValidateRejectsInvalidUpstream(t *testing.T) {
 	cfg := defaults()
-	cfg.Routes = []Route{{PathPrefix: "/api/", Upstream: "ftp://example.com"}}
+	cfg.Routes = []Route{{PathPrefix: "/api/", Upstreams: []string{"ftp://example.com"}}}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -40,7 +40,7 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 		"server":     "server:\n  unknown: true\n",
 		"middleware": "middleware:\n  unknown: true\n",
 		"cors":       "middleware:\n  cors:\n    unknown: true\n",
-		"route":      "routes:\n  - path_prefix: /api/\n    upstream: http://localhost:8081\n    unknown: true\n",
+		"route":      "routes:\n  - path_prefix: /api/\n    upstreams: [http://localhost:8081]\n    unknown: true\n",
 	}
 	for name, fragment := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -53,7 +53,7 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 }
 
 func TestLoadRejectsMultipleDocuments(t *testing.T) {
-	_, err := loadYAML(t, "routes:\n  - path_prefix: /api/\n    upstream: http://localhost:8081\n---\nroutes: []\n")
+	_, err := loadYAML(t, "routes:\n  - path_prefix: /api/\n    upstreams: [http://localhost:8081]\n---\nroutes: []\n")
 	if err == nil || !strings.Contains(err.Error(), "exactly one YAML document") {
 		t.Fatalf("error = %v, want multiple document error", err)
 	}
@@ -61,7 +61,7 @@ func TestLoadRejectsMultipleDocuments(t *testing.T) {
 
 func TestLoadRejectsInvalidEnvironmentDuration(t *testing.T) {
 	t.Setenv("GATEWAY_SERVER_READ_TIMEOUT", "eventually")
-	_, err := loadYAML(t, "routes:\n  - path_prefix: /api/\n    upstream: http://localhost:8081\n")
+	_, err := loadYAML(t, "routes:\n  - path_prefix: /api/\n    upstreams: [http://localhost:8081]\n")
 	if err == nil || !strings.Contains(err.Error(), "GATEWAY_SERVER_READ_TIMEOUT") {
 		t.Fatalf("error = %v, want environment variable error", err)
 	}
@@ -73,12 +73,16 @@ func TestValidateRuntimeSettings(t *testing.T) {
 		"request timeout":  func(cfg *Config) { cfg.Middleware.RequestTimeout = -1 },
 		"log level":        func(cfg *Config) { cfg.Log.Level = "verbose" },
 		"log format":       func(cfg *Config) { cfg.Log.Format = "xml" },
-		"upstream host":    func(cfg *Config) { cfg.Routes[0].Upstream = "http://" },
+		"upstream host":    func(cfg *Config) { cfg.Routes[0].Upstreams = []string{"http://"} },
+		"empty upstreams":  func(cfg *Config) { cfg.Routes[0].Upstreams = nil },
+		"duplicate": func(cfg *Config) {
+			cfg.Routes[0].Upstreams = []string{"http://localhost:8081", "http://localhost:8081"}
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
 			cfg := defaults()
-			cfg.Routes = []Route{{PathPrefix: "/api/", Upstream: "http://localhost:8081"}}
+			cfg.Routes = []Route{{PathPrefix: "/api/", Upstreams: []string{"http://localhost:8081"}}}
 			mutate(&cfg)
 			if err := cfg.Validate(); err == nil {
 				t.Fatal("expected validation error")
@@ -100,5 +104,5 @@ func validRoutesUnlessPresent(contents string) string {
 	if strings.Contains(contents, "routes:") {
 		return ""
 	}
-	return "routes:\n  - path_prefix: /api/\n    upstream: http://localhost:8081\n"
+	return "routes:\n  - path_prefix: /api/\n    upstreams: [http://localhost:8081]\n"
 }

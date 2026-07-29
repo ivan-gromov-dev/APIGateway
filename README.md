@@ -10,8 +10,9 @@ observability endpoints, and graceful shutdown.
 go run ./cmd/gateway -config configs/gateway.yaml
 ```
 
-The example configuration forwards `/api/` to a backend listening on
-`http://localhost:8081`. Operational endpoints are exposed separately:
+The example configuration distributes `/api/` requests in round-robin order
+between backends listening on ports `8081`, `8082`, and `8083`. Operational
+endpoints are exposed separately:
 
 - `GET http://localhost:9090/healthz` — process liveness
 - `GET http://localhost:9090/readyz` — gateway readiness
@@ -24,6 +25,9 @@ Run the complete local demo with:
 docker compose up --build
 curl http://localhost:8080/api/hello
 ```
+
+Repeat the request to see `backend-1`, `backend-2`, and `backend-3` rotate in
+the response.
 
 ## Configuration
 
@@ -44,6 +48,7 @@ make build
 ```text
 cmd/gateway/          application entry point
 internal/config/      YAML loading and validation
+internal/balancer/    concurrent load-balancing algorithms
 internal/middleware/  request ID, recovery, logging, timeout, CORS
 internal/proxy/       reverse proxy construction
 internal/server/      HTTP servers and lifecycle
@@ -54,7 +59,7 @@ examples/             demo backend
 
 ## Roadmap
 
-- Load balancing, retries, circuit breaking, and rate limiting
+- Retries, circuit breaking, and rate limiting
 - JWT authentication and response caching
 - Configuration reload and OpenTelemetry
 - gRPC proxying, service discovery, and progressive delivery
