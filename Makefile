@@ -1,4 +1,4 @@
-.PHONY: build run test lint tidy
+.PHONY: build run test test-integration lint tidy
 
 build:
 	go build -trimpath -o bin/gateway ./cmd/gateway
@@ -8,6 +8,9 @@ run:
 
 test:
 	go test -race -cover ./...
+
+test-integration:
+	go test -race -count=1 ./test/integration/...
 
 lint:
 	go vet ./...
