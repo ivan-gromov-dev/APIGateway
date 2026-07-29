@@ -10,9 +10,9 @@ observability endpoints, and graceful shutdown.
 go run ./cmd/gateway -config configs/gateway.yaml
 ```
 
-The example configuration distributes `/api/` requests in round-robin order
-between backends listening on ports `8081`, `8082`, and `8083`. Operational
-endpoints are exposed separately:
+The example configuration distributes general `/api/` requests between three
+users-service instances and routes the more specific `/api/billing/` prefix to
+the billing service. Operational endpoints are exposed separately:
 
 - `GET http://localhost:9090/healthz` — process liveness
 - `GET http://localhost:9090/readyz` — gateway readiness
@@ -24,10 +24,19 @@ Run the complete local demo with:
 ```bash
 docker compose up --build
 curl http://localhost:8080/api/hello
+curl http://localhost:8080/api/users
+curl http://localhost:8080/api/users/42
+curl http://localhost:8080/api/billing/invoices
+curl http://localhost:8080/api/billing/invoices/inv-1002
+curl -X POST http://localhost:8080/api/billing/payments
 ```
 
-Repeat the request to see `backend-1`, `backend-2`, and `backend-3` rotate in
-the response.
+Repeat a users request to see `backend-1`, `backend-2`, and `backend-3` rotate
+in the response. The overlapping route prefixes are intentional: billing
+requests demonstrate that the router selects the most specific matching
+service before the gateway strips the prefix and forwards the remaining
+endpoint path.
+
 
 ## Configuration
 

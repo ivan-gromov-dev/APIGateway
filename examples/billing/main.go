@@ -1,4 +1,4 @@
-// Command backend starts a minimal HTTP service for local gateway demonstrations.
+// Command billing starts a minimal billing service for gateway demonstrations.
 package main
 
 import (
@@ -11,36 +11,37 @@ import (
 func main() {
 	name := os.Getenv("SERVICE_NAME")
 	if name == "" {
-		name = "users-service"
+		name = "billing-service"
 	}
 	address := os.Getenv("BACKEND_ADDRESS")
 	if address == "" {
-		address = ":8081"
+		address = ":8091"
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /hello", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"message": "hello",
-			"service": name,
-		})
-	})
-	mux.HandleFunc("GET /users", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /invoices", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"service": name,
-			"users": []map[string]any{
-				{"id": "1", "name": "Ada"},
-				{"id": "2", "name": "Linus"},
+			"invoices": []map[string]any{
+				{"id": "inv-1001", "status": "paid", "amount": 1250},
+				{"id": "inv-1002", "status": "open", "amount": 4900},
 			},
 		})
 	})
-	mux.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /invoices/{id}", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"service": name,
-			"user": map[string]string{
-				"id":   r.PathValue("id"),
-				"name": "Demo User",
+			"invoice": map[string]any{
+				"id":     r.PathValue("id"),
+				"status": "open",
+				"amount": 4900,
 			},
+		})
+	})
+	mux.HandleFunc("POST /payments", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"service": name,
+			"status":  "processing",
 		})
 	})
 

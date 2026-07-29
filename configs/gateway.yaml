@@ -22,6 +22,10 @@ middleware:
     allowed_headers: [Accept, Authorization, Content-Type, X-Request-ID]
 
 routes:
+  - path_prefix: /api/billing/
+    upstreams:
+      - http://localhost:8091
+    strip_prefix: true
   - path_prefix: /api/
     upstreams:
       - http://localhost:8081

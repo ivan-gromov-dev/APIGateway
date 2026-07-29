@@ -18,6 +18,10 @@ middleware:
     allowed_methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
     allowed_headers: [Accept, Authorization, Content-Type, X-Request-ID]
 routes:
+  - path_prefix: /api/billing/
+    upstreams:
+      - http://billing:8091
+    strip_prefix: true
   - path_prefix: /api/
     upstreams:
       - http://backend-1:8081

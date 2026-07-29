@@ -8,6 +8,7 @@ services:
       - backend-1
       - backend-2
       - backend-3
+      - billing
   backend-1:
     build:
       context: .
@@ -26,3 +27,9 @@ services:
       dockerfile: deployments/backend.Dockerfile
     environment:
       SERVICE_NAME: backend-3
+  billing:
+    build:
+      context: .
+      dockerfile: deployments/billing.Dockerfile
+    environment:
+      SERVICE_NAME: billing-service
