@@ -1,3 +1,4 @@
+// Package metrics collects and exposes Prometheus-compatible gateway metrics.
 package metrics
 
 import (

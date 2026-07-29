@@ -1,3 +1,4 @@
+// Package proxy builds reverse proxies that forward configured routes to upstream services.
 package proxy
 
 import (

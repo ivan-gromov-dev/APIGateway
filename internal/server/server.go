@@ -1,3 +1,4 @@
+// Package server constructs and coordinates the gateway's public and administrative HTTP servers.
 package server
 
 import (
@@ -28,7 +29,8 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	handler := middleware.Chain(proxyHandler,
+	handler := middleware.Chain(
+		proxyHandler,
 		middleware.Recovery(s.logger),
 		middleware.RequestID,
 		middleware.Logging(s.logger, collector),

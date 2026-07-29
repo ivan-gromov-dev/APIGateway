@@ -1,3 +1,4 @@
+// Command backend starts a minimal HTTP service for local gateway demonstrations.
 package main
 
 import (

@@ -1,3 +1,4 @@
+// Command gateway starts the API gateway and manages its process lifecycle.
 package main
 
 import (
@@ -10,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/Djunichi/APIGateway/internal/config"
+	"github.com/Djunichi/APIGateway/internal/logger"
 	"github.com/Djunichi/APIGateway/internal/server"
 )
 
@@ -29,35 +31,22 @@ func run() error {
 		return fmt.Errorf("load configuration: %w", err)
 	}
 
-	logger := newLogger(cfg.Log)
-	slog.SetDefault(logger)
+	log := logger.New(cfg.Log)
+	slog.SetDefault(log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	logger.Info("starting gateway",
+	log.Info("starting gateway",
 		"address", cfg.Server.Address,
 		"admin_address", cfg.Admin.Address,
 		"routes", len(cfg.Routes),
 	)
 
-	if err := server.New(cfg, logger).Run(ctx); err != nil {
+	if err := server.New(cfg, log).Run(ctx); err != nil {
 		return fmt.Errorf("run gateway: %w", err)
 	}
 
-	logger.Info("gateway stopped")
+	log.Info("gateway stopped")
 	return nil
-}
-
-func newLogger(cfg config.Log) *slog.Logger {
-	var level slog.Level
-	if err := level.UnmarshalText([]byte(cfg.Level)); err != nil {
-		level = slog.LevelInfo
-	}
-
-	options := &slog.HandlerOptions{Level: level}
-	if cfg.Format == "text" {
-		return slog.New(slog.NewTextHandler(os.Stdout, options))
-	}
-	return slog.New(slog.NewJSONHandler(os.Stdout, options))
 }

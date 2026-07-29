@@ -1,3 +1,4 @@
+// Package config loads, validates, and exposes the gateway's runtime configuration.
 package config
 
 import (
@@ -184,7 +185,8 @@ func (m *Middleware) UnmarshalYAML(value *yaml.Node) error {
 func parseDurations(values map[string]struct {
 	raw string
 	dst *time.Duration
-}) error {
+},
+) error {
 	for name, item := range values {
 		if item.raw == "" {
 			continue
