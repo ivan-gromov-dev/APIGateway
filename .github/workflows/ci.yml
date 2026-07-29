@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,7 +17,24 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go mod download
-      - run: go vet ./...
+      - name: Build gateway
+        run: go build ./cmd/gateway
+      - name: Build users service
+        run: go build ./examples/backend
+      - name: Build billing service
+        run: go build ./examples/billing
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: Run static analysis
+        run: go vet ./...
       - name: Test coverage of each internal package
         shell: bash
         run: |
@@ -39,4 +56,15 @@ jobs:
           done < <(go list ./internal/...)
 
           exit "${failed}"
-      - run: go build ./cmd/gateway
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: Run integration tests
+        run: go test -race -count=1 ./test/integration/...
