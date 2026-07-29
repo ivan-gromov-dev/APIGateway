@@ -32,6 +32,9 @@ go.work.sum
 bin/
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
 .vscode/launch.json
+
+#Load test results
+test/load/results/

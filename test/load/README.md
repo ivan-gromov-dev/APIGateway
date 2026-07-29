@@ -9,6 +9,40 @@ docker compose up --build
 Load tests are intentionally not part of CI because their results depend on
 the runner's CPU, networking, and neighbouring workloads.
 
+## PowerShell baseline
+
+The baseline script warms up the gateway and runs Users GET, Billing GET, and
+Billing POST scenarios. All `hey` output is saved to a timestamped file under
+`test/load/results`.
+
+```powershell
+.\test\load\baseline.ps1
+```
+
+Override the default 60-second duration and concurrency when needed:
+
+```powershell
+.\test\load\baseline.ps1 -Duration 30s -Concurrency 50
+```
+
+## Cross-platform shell baseline
+
+Linux, macOS, WSL, and Git Bash can run the equivalent POSIX shell script:
+
+```bash
+sh test/load/baseline.sh
+```
+
+Override its defaults with long options:
+
+```bash
+sh test/load/baseline.sh \
+  --duration 30s \
+  --concurrency 50 \
+  --warmup-requests 500 \
+  --warmup-concurrency 10
+```
+
 ## hey
 
 `hey` is convenient for quick, single-endpoint checks. It uses a fixed number
