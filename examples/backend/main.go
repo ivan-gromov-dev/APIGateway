@@ -13,9 +13,14 @@ func main() {
 	if name == "" {
 		name = "example-backend"
 	}
+	address := os.Getenv("BACKEND_ADDRESS")
+	if address == "" {
+		address = ":8081"
+	}
 	http.HandleFunc("/hello", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"message": "hello", "service": name})
 	})
-	log.Fatal(http.ListenAndServe(":8081", nil))
+	log.Printf("%s listening on %s", name, address)
+	log.Fatal(http.ListenAndServe(address, nil))
 }

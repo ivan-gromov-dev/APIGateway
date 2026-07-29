@@ -23,5 +23,8 @@ middleware:
 
 routes:
   - path_prefix: /api/
-    upstream: http://localhost:8081
+    upstreams:
+      - http://localhost:8081
+      - http://localhost:8082
+      - http://localhost:8083
     strip_prefix: true

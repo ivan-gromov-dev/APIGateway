@@ -56,9 +56,9 @@ func (c *CORS) UnmarshalYAML(value *yaml.Node) error {
 }
 
 type Route struct {
-	PathPrefix  string `yaml:"path_prefix"`
-	Upstream    string `yaml:"upstream"`
-	StripPrefix bool   `yaml:"strip_prefix"`
+	PathPrefix  string   `yaml:"path_prefix"`
+	Upstreams   []string `yaml:"upstreams"`
+	StripPrefix bool     `yaml:"strip_prefix"`
 }
 
 func Load(path string) (Config, error) {
@@ -146,9 +146,19 @@ func (c Config) Validate() error {
 			return fmt.Errorf("route %d: duplicate path_prefix %q", i, route.PathPrefix)
 		}
 		seen[route.PathPrefix] = struct{}{}
-		upstream, err := url.Parse(route.Upstream)
-		if err != nil || (upstream.Scheme != "http" && upstream.Scheme != "https") || upstream.Host == "" {
-			return fmt.Errorf("route %d: upstream must use http or https", i)
+		if len(route.Upstreams) == 0 {
+			return fmt.Errorf("route %d: at least one upstream is required", i)
+		}
+		seenUpstreams := make(map[string]struct{}, len(route.Upstreams))
+		for j, rawUpstream := range route.Upstreams {
+			upstream, err := url.Parse(rawUpstream)
+			if err != nil || (upstream.Scheme != "http" && upstream.Scheme != "https") || upstream.Host == "" {
+				return fmt.Errorf("route %d upstream %d: must use http or https", i, j)
+			}
+			if _, ok := seenUpstreams[upstream.String()]; ok {
+				return fmt.Errorf("route %d: duplicate upstream %q", i, rawUpstream)
+			}
+			seenUpstreams[upstream.String()] = struct{}{}
 		}
 	}
 	return nil

@@ -19,5 +19,8 @@ middleware:
     allowed_headers: [Accept, Authorization, Content-Type, X-Request-ID]
 routes:
   - path_prefix: /api/
-    upstream: http://backend:8081
+    upstreams:
+      - http://backend-1:8081
+      - http://backend-2:8081
+      - http://backend-3:8081
     strip_prefix: true
