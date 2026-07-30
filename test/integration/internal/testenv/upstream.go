@@ -20,6 +20,7 @@ type upstream struct {
 	server   *httptest.Server
 	mu       sync.Mutex
 	requests []RecordedRequest
+	statuses []int
 }
 
 func newUpstream(t testing.TB, service string) *upstream {
@@ -27,6 +28,13 @@ func newUpstream(t testing.TB, service string) *upstream {
 	instance := &upstream{service: service}
 	instance.server = httptest.NewServer(http.HandlerFunc(instance.serveHTTP))
 	t.Cleanup(instance.server.Close)
+	return instance
+}
+
+func newUpstreamWithStatuses(t testing.TB, service string, statuses ...int) *upstream {
+	t.Helper()
+	instance := newUpstream(t, service)
+	instance.statuses = append([]int(nil), statuses...)
 	return instance
 }
 
@@ -42,9 +50,15 @@ func (u *upstream) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	u.mu.Lock()
 	u.requests = append(u.requests, request)
+	status := http.StatusOK
+	if len(u.statuses) > 0 {
+		status = u.statuses[0]
+		u.statuses = u.statuses[1:]
+	}
 	u.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(upstreamPayload{
 		Service:   u.service,
 		Path:      request.Path,

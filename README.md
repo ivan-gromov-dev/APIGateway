@@ -16,6 +16,7 @@ operational endpoints, graceful shutdown, and real-network integration testing.
 - Request ID propagation, panic recovery, request logging, timeout, and CORS
 - Prometheus-compatible metrics and Go `pprof`
 - Unit tests, real-network integration tests, and load-test scenarios
+- Retries across upstreams for safe, replayable requests
 - Docker Compose demo with Users and Billing services
 - Parallel GitHub Actions jobs for build, unit tests, and integration tests
 
@@ -74,6 +75,12 @@ The default local configuration is in
 [`configs/gateway.docker.yaml`](configs/gateway.docker.yaml).
 
 ```yaml
+retry:
+  max_attempts: 3
+  per_attempt_timeout: 2s
+  backoff: 25ms
+  statuses: [502, 503, 504]
+
 routes:
   - path_prefix: /api/billing/
     upstreams:
@@ -91,6 +98,13 @@ routes:
 Unknown YAML fields, duplicate upstreams, unsupported URL schemes, invalid
 durations, duplicate route prefixes, and multiple YAML documents are rejected
 during startup.
+
+`max_attempts` counts the initial request and is limited to 10. Retries apply
+only to `GET`, `HEAD`, and `OPTIONS`, and only when a request body is absent or
+can be replayed through `GetBody`. Unsafe methods such as `POST`, `PUT`,
+`PATCH`, and `DELETE` are sent once. Each attempt selects the next upstream;
+network errors and configured 5xx statuses are retryable within the request
+context and per-attempt timeout.
 
 Environment variables override selected configuration values:
 

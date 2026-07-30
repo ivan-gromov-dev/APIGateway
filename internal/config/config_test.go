@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoad(t *testing.T) {
@@ -26,6 +27,79 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+func TestLoadRetryConfiguration(t *testing.T) {
+	cfg, err := loadYAML(t, `
+retry:
+  max_attempts: 4
+  per_attempt_timeout: 750ms
+  backoff: 25ms
+  statuses: [500, 502, 504]
+routes:
+  - path_prefix: /api/
+    upstreams: [http://localhost:8081]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Retry.MaxAttempts != 4 ||
+		cfg.Retry.PerAttemptTimeout != 750*time.Millisecond ||
+		cfg.Retry.Backoff != 25*time.Millisecond {
+		t.Fatalf("retry configuration = %+v", cfg.Retry)
+	}
+	if len(cfg.Retry.Statuses) != 3 || cfg.Retry.Statuses[0] != 500 {
+		t.Fatalf("retry statuses = %v", cfg.Retry.Statuses)
+	}
+}
+
+func TestLoadMiddlewareConfiguration(t *testing.T) {
+	cfg, err := loadYAML(t, `
+middleware:
+  request_timeout: 3s
+  cors:
+    allowed_origins: [https://example.com]
+    allowed_methods: [GET]
+    allowed_headers: [X-Request-ID]
+routes:
+  - path_prefix: /api/
+    upstreams: [http://localhost:8081]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Middleware.RequestTimeout != 3*time.Second {
+		t.Fatalf("request timeout = %s", cfg.Middleware.RequestTimeout)
+	}
+	if len(cfg.Middleware.CORS.AllowedOrigins) != 1 ||
+		cfg.Middleware.CORS.AllowedOrigins[0] != "https://example.com" {
+		t.Fatalf("allowed origins = %v", cfg.Middleware.CORS.AllowedOrigins)
+	}
+	if len(cfg.Middleware.CORS.AllowedMethods) != 1 ||
+		cfg.Middleware.CORS.AllowedMethods[0] != "GET" {
+		t.Fatalf("allowed methods = %v", cfg.Middleware.CORS.AllowedMethods)
+	}
+	if len(cfg.Middleware.CORS.AllowedHeaders) != 1 ||
+		cfg.Middleware.CORS.AllowedHeaders[0] != "X-Request-ID" {
+		t.Fatalf("allowed headers = %v", cfg.Middleware.CORS.AllowedHeaders)
+	}
+}
+
+func TestLoadRejectsInvalidConfiguredDurations(t *testing.T) {
+	tests := map[string]string{
+		"retry attempt timeout": "retry:\n  per_attempt_timeout: eventually\n",
+		"retry backoff":         "retry:\n  backoff: later\n",
+		"middleware timeout":    "middleware:\n  request_timeout: soon\n",
+		"server timeout":        "server:\n  read_timeout: tomorrow\n",
+	}
+	for name, fragment := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := loadYAML(t, fragment+validRoutesUnlessPresent(fragment))
+			if err == nil {
+				t.Fatal("expected invalid duration error")
+			}
+		})
+	}
+}
+
 func TestValidateRejectsInvalidUpstream(t *testing.T) {
 	cfg := defaults()
 	cfg.Routes = []Route{{PathPrefix: "/api/", Upstreams: []string{"ftp://example.com"}}}
@@ -40,6 +114,7 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 		"server":     "server:\n  unknown: true\n",
 		"middleware": "middleware:\n  unknown: true\n",
 		"cors":       "middleware:\n  cors:\n    unknown: true\n",
+		"retry":      "retry:\n  unknown: true\n",
 		"route":      "routes:\n  - path_prefix: /api/\n    upstreams: [http://localhost:8081]\n    unknown: true\n",
 	}
 	for name, fragment := range tests {
@@ -77,6 +152,13 @@ func TestValidateRuntimeSettings(t *testing.T) {
 		"empty upstreams":  func(cfg *Config) { cfg.Routes[0].Upstreams = nil },
 		"duplicate": func(cfg *Config) {
 			cfg.Routes[0].Upstreams = []string{"http://localhost:8081", "http://localhost:8081"}
+		},
+		"retry attempts": func(cfg *Config) { cfg.Retry.MaxAttempts = 0 },
+		"retry timeout":  func(cfg *Config) { cfg.Retry.PerAttemptTimeout = 0 },
+		"retry backoff":  func(cfg *Config) { cfg.Retry.Backoff = -1 },
+		"retry statuses": func(cfg *Config) { cfg.Retry.Statuses = []int{429} },
+		"duplicate retry status": func(cfg *Config) {
+			cfg.Retry.Statuses = []int{503, 503}
 		},
 	}
 	for name, mutate := range tests {

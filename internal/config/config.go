@@ -20,6 +20,7 @@ type Config struct {
 	Admin      HTTPServer `yaml:"admin"`
 	Log        Log        `yaml:"log"`
 	Middleware Middleware `yaml:"middleware"`
+	Retry      Retry      `yaml:"retry"`
 	Routes     []Route    `yaml:"routes"`
 }
 
@@ -45,6 +46,13 @@ type CORS struct {
 	AllowedOrigins []string `yaml:"allowed_origins"`
 	AllowedMethods []string `yaml:"allowed_methods"`
 	AllowedHeaders []string `yaml:"allowed_headers"`
+}
+
+type Retry struct {
+	MaxAttempts       int           `yaml:"max_attempts"`
+	PerAttemptTimeout time.Duration `yaml:"per_attempt_timeout"`
+	Backoff           time.Duration `yaml:"backoff"`
+	Statuses          []int         `yaml:"statuses"`
 }
 
 func (c *CORS) UnmarshalYAML(value *yaml.Node) error {
@@ -97,6 +105,10 @@ func defaults() Config {
 		},
 		Admin: HTTPServer{Address: ":9090", ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second},
 		Log:   Log{Level: "info", Format: "json"},
+		Retry: Retry{
+			MaxAttempts: 1, PerAttemptTimeout: 2 * time.Second,
+			Statuses: []int{502, 503, 504},
+		},
 		Middleware: Middleware{
 			RequestTimeout: 15 * time.Second,
 			CORS: CORS{
@@ -126,6 +138,28 @@ func (c Config) Validate() error {
 	}
 	if c.Middleware.RequestTimeout < 0 {
 		return errors.New("middleware request_timeout must not be negative")
+	}
+	if c.Retry.MaxAttempts < 1 || c.Retry.MaxAttempts > 10 {
+		return errors.New("retry max_attempts must be between 1 and 10")
+	}
+	if c.Retry.PerAttemptTimeout <= 0 {
+		return errors.New("retry per_attempt_timeout must be positive")
+	}
+	if c.Retry.Backoff < 0 {
+		return errors.New("retry backoff must not be negative")
+	}
+	if len(c.Retry.Statuses) == 0 {
+		return errors.New("retry statuses must not be empty")
+	}
+	seenStatuses := make(map[int]struct{}, len(c.Retry.Statuses))
+	for _, status := range c.Retry.Statuses {
+		if status < 500 || status > 599 {
+			return fmt.Errorf("retry status %d must be a 5xx status", status)
+		}
+		if _, exists := seenStatuses[status]; exists {
+			return fmt.Errorf("duplicate retry status %d", status)
+		}
+		seenStatuses[status] = struct{}{}
 	}
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(c.Log.Level)); err != nil {
@@ -250,6 +284,35 @@ func (m *Middleware) UnmarshalYAML(value *yaml.Node) error {
 	}
 	m.RequestTimeout = duration
 	return nil
+}
+
+func (r *Retry) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "max_attempts", "per_attempt_timeout", "backoff", "statuses"); err != nil {
+		return err
+	}
+	type plain struct {
+		MaxAttempts       *int   `yaml:"max_attempts"`
+		PerAttemptTimeout string `yaml:"per_attempt_timeout"`
+		Backoff           string `yaml:"backoff"`
+		Statuses          []int  `yaml:"statuses"`
+	}
+	var p plain
+	if err := value.Decode(&p); err != nil {
+		return err
+	}
+	if p.MaxAttempts != nil {
+		r.MaxAttempts = *p.MaxAttempts
+	}
+	if p.Statuses != nil {
+		r.Statuses = p.Statuses
+	}
+	return parseDurations(map[string]struct {
+		raw string
+		dst *time.Duration
+	}{
+		"per_attempt_timeout": {p.PerAttemptTimeout, &r.PerAttemptTimeout},
+		"backoff":             {p.Backoff, &r.Backoff},
+	})
 }
 
 func rejectUnknownFields(value *yaml.Node, allowed ...string) error {
