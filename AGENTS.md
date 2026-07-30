@@ -37,6 +37,7 @@ changes.
 - `internal/config` owns strict YAML loading, defaults, environment overrides,
   and semantic validation.
 - `internal/balancer` owns load-balancing contracts and algorithms.
+- `internal/circuitbreaker` owns the HTTP-independent circuit state machine.
 - `internal/proxy` owns route-specific reverse proxy construction.
 - `internal/middleware` owns composable HTTP cross-cutting behaviour.
 - `internal/metrics` and `internal/logger` own observability primitives.

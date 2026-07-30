@@ -27,6 +27,10 @@ retry:
   backoff: 25ms
   statuses: [502, 503, 504]
 
+circuit_breaker:
+  failure_threshold: 5
+  open_timeout: 30s
+
 routes:
   - path_prefix: /api/billing/
     upstreams:

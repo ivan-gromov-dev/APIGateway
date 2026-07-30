@@ -81,6 +81,10 @@ retry:
   backoff: 25ms
   statuses: [502, 503, 504]
 
+circuit_breaker:
+  failure_threshold: 5
+  open_timeout: 30s
+
 routes:
   - path_prefix: /api/billing/
     upstreams:
@@ -105,6 +109,10 @@ can be replayed through `GetBody`. Unsafe methods such as `POST`, `PUT`,
 `PATCH`, and `DELETE` are sent once. Each attempt selects the next upstream;
 network errors and configured 5xx statuses are retryable within the request
 context and per-attempt timeout.
+
+The circuit breaker state machine and its configuration are implemented as the
+foundation for passive upstream health tracking. Proxy traffic is not connected
+to the breaker until that tracking layer is added.
 
 Environment variables override selected configuration values:
 
@@ -268,6 +276,7 @@ It is stored in [`.codex/skills/review-api-gateway`](.codex/skills/review-api-ga
 │   └── billing/                    demo Billing service
 ├── internal/
 │   ├── balancer/                   balancer contract and Round Robin
+│   ├── circuitbreaker/              circuit breaker state machine
 │   ├── config/                     loading and strict validation
 │   ├── logger/                     structured logger construction
 │   ├── metrics/                    Prometheus-compatible metrics

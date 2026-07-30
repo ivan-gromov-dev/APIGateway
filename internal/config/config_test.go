@@ -51,6 +51,42 @@ routes:
 	}
 }
 
+func TestLoadCircuitBreakerConfiguration(t *testing.T) {
+	cfg, err := loadYAML(t, `
+circuit_breaker:
+  failure_threshold: 7
+  open_timeout: 45s
+routes:
+  - path_prefix: /api/
+    upstreams: [http://localhost:8081]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CircuitBreaker.FailureThreshold != 7 {
+		t.Fatalf("failure threshold = %d, want 7", cfg.CircuitBreaker.FailureThreshold)
+	}
+	if cfg.CircuitBreaker.OpenTimeout != 45*time.Second {
+		t.Fatalf("open timeout = %s, want 45s", cfg.CircuitBreaker.OpenTimeout)
+	}
+}
+
+func TestLoadPartialCircuitBreakerConfigurationPreservesDefaults(t *testing.T) {
+	cfg, err := loadYAML(t, `
+circuit_breaker:
+  failure_threshold: 7
+routes:
+  - path_prefix: /api/
+    upstreams: [http://localhost:8081]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CircuitBreaker.OpenTimeout != 30*time.Second {
+		t.Fatalf("open timeout = %s, want default 30s", cfg.CircuitBreaker.OpenTimeout)
+	}
+}
+
 func TestLoadMiddlewareConfiguration(t *testing.T) {
 	cfg, err := loadYAML(t, `
 middleware:
@@ -89,6 +125,7 @@ func TestLoadRejectsInvalidConfiguredDurations(t *testing.T) {
 		"retry backoff":         "retry:\n  backoff: later\n",
 		"middleware timeout":    "middleware:\n  request_timeout: soon\n",
 		"server timeout":        "server:\n  read_timeout: tomorrow\n",
+		"circuit open timeout":  "circuit_breaker:\n  open_timeout: someday\n",
 	}
 	for name, fragment := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -110,12 +147,13 @@ func TestValidateRejectsInvalidUpstream(t *testing.T) {
 
 func TestLoadRejectsUnknownFields(t *testing.T) {
 	tests := map[string]string{
-		"root":       "unknown: true\n",
-		"server":     "server:\n  unknown: true\n",
-		"middleware": "middleware:\n  unknown: true\n",
-		"cors":       "middleware:\n  cors:\n    unknown: true\n",
-		"retry":      "retry:\n  unknown: true\n",
-		"route":      "routes:\n  - path_prefix: /api/\n    upstreams: [http://localhost:8081]\n    unknown: true\n",
+		"root":            "unknown: true\n",
+		"server":          "server:\n  unknown: true\n",
+		"middleware":      "middleware:\n  unknown: true\n",
+		"cors":            "middleware:\n  cors:\n    unknown: true\n",
+		"retry":           "retry:\n  unknown: true\n",
+		"circuit breaker": "circuit_breaker:\n  unknown: true\n",
+		"route":           "routes:\n  - path_prefix: /api/\n    upstreams: [http://localhost:8081]\n    unknown: true\n",
 	}
 	for name, fragment := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -160,6 +198,8 @@ func TestValidateRuntimeSettings(t *testing.T) {
 		"duplicate retry status": func(cfg *Config) {
 			cfg.Retry.Statuses = []int{503, 503}
 		},
+		"circuit breaker threshold": func(cfg *Config) { cfg.CircuitBreaker.FailureThreshold = 0 },
+		"circuit breaker timeout":   func(cfg *Config) { cfg.CircuitBreaker.OpenTimeout = 0 },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {

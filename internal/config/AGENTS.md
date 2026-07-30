@@ -25,6 +25,8 @@ fields, or invalid routes.
 - `Config.Admin` configures the operational HTTP server.
 - `Config.Log` accepts `json` or `text` and a valid `slog` level.
 - `Config.Middleware` contains request timeout and CORS policy.
+- `Config.CircuitBreaker` contains the failure threshold and open timeout used
+  by the circuit breaker state machine.
 - Each `Route` has a unique absolute `path_prefix`, one or more HTTP(S)
   `upstreams`, and optional prefix stripping.
 

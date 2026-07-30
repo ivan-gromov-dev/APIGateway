@@ -16,6 +16,7 @@ Keep package-specific behaviour out of this file.
 The current dependency graph is intentionally simple:
 
 ```text
+                    circuitbreaker
 config ───────────────┐
 balancer ──► proxy ───┼──► server
 config ─────► proxy ──┘
