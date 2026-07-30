@@ -17,6 +17,7 @@ operational endpoints, graceful shutdown, and real-network integration testing.
 - Prometheus-compatible metrics and Go `pprof`
 - Unit tests, real-network integration tests, and load-test scenarios
 - Retries across upstreams for safe, replayable requests
+- Passive upstream health tracking with per-instance circuit breakers
 - Docker Compose demo with Users and Billing services
 - Parallel GitHub Actions jobs for build, unit tests, and integration tests
 
@@ -81,6 +82,11 @@ retry:
   backoff: 25ms
   statuses: [502, 503, 504]
 
+circuit_breaker:
+  failure_threshold: 5
+  open_timeout: 30s
+  failure_statuses: [502, 503, 504]
+
 routes:
   - path_prefix: /api/billing/
     upstreams:
@@ -105,6 +111,12 @@ can be replayed through `GetBody`. Unsafe methods such as `POST`, `PUT`,
 `PATCH`, and `DELETE` are sent once. Each attempt selects the next upstream;
 network errors and configured 5xx statuses are retryable within the request
 context and per-attempt timeout.
+
+Each upstream instance owns an independent circuit breaker. Configured failure
+statuses and transport failures are recorded per proxy attempt; open upstreams
+are skipped. If no upstream is available, the gateway returns `503 Service
+Unavailable`. Client cancellation is neutral and does not penalize upstream
+health.
 
 Environment variables override selected configuration values:
 
@@ -268,12 +280,14 @@ It is stored in [`.codex/skills/review-api-gateway`](.codex/skills/review-api-ga
 │   └── billing/                    demo Billing service
 ├── internal/
 │   ├── balancer/                   balancer contract and Round Robin
+│   ├── circuitbreaker/              circuit breaker state machine
 │   ├── config/                     loading and strict validation
 │   ├── logger/                     structured logger construction
 │   ├── metrics/                    Prometheus-compatible metrics
 │   ├── middleware/                 HTTP middleware chain
 │   ├── proxy/                      route-aware reverse proxies
-│   └── server/                     listeners, readiness, and lifecycle
+│   ├── server/                     listeners, readiness, and lifecycle
+│   └── upstream/                   upstream instance and health state
 ├── test/
 │   ├── integration/
 │   │   └── internal/testenv/       shared integration harness

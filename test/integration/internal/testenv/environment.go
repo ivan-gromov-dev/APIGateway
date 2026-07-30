@@ -23,7 +23,15 @@ type settings struct {
 	users        int
 	billing      bool
 	retry        config.Retry
+	circuit      config.CircuitBreaker
 	userStatuses map[int][]int
+}
+
+// WithCircuitBreaker configures passive circuit breaker tracking.
+func WithCircuitBreaker(circuit config.CircuitBreaker) Option {
+	return func(settings *settings) {
+		settings.circuit = circuit
+	}
 }
 
 // WithRetry configures the gateway retry policy.
@@ -125,8 +133,9 @@ func New(t testing.TB, options ...Option) *Environment {
 		Middleware: config.Middleware{
 			RequestTimeout: time.Second,
 		},
-		Retry:  cfg.retry,
-		Routes: routes,
+		Retry:          cfg.retry,
+		CircuitBreaker: cfg.circuit,
+		Routes:         routes,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

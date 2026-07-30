@@ -2,28 +2,36 @@ package balancer
 
 import (
 	"errors"
-	"net/url"
 	"sync/atomic"
+	"time"
+
+	"github.com/Djunichi/APIGateway/internal/upstream"
 )
 
 // RoundRobin selects upstreams sequentially and is safe for concurrent use.
 type RoundRobin struct {
-	upstreams []*url.URL
+	upstreams []*upstream.Target
 	next      atomic.Uint64
 }
 
 // NewRoundRobin creates a round-robin balancer for a non-empty upstream list.
-func NewRoundRobin(upstreams []*url.URL) (*RoundRobin, error) {
+func NewRoundRobin(upstreams []*upstream.Target) (*RoundRobin, error) {
 	if len(upstreams) == 0 {
 		return nil, errors.New("at least one upstream is required")
 	}
-	return &RoundRobin{upstreams: append([]*url.URL(nil), upstreams...)}, nil
+	return &RoundRobin{upstreams: append([]*upstream.Target(nil), upstreams...)}, nil
 }
 
-// Next returns the next upstream in rotation.
-func (r *RoundRobin) Next() *url.URL {
+// Next returns the next available upstream in rotation.
+func (r *RoundRobin) Next(now time.Time) (Selection, bool) {
 	index := r.next.Add(1) - 1
-	return r.upstreams[index%uint64(len(r.upstreams))]
+	for offset := range uint64(len(r.upstreams)) {
+		target := r.upstreams[(index+offset)%uint64(len(r.upstreams))]
+		if done, allowed := target.Acquire(now); allowed {
+			return Selection{Target: target, Done: done}, true
+		}
+	}
+	return Selection{}, false
 }
 
 var _ Balancer = (*RoundRobin)(nil)

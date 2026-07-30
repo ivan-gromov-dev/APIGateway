@@ -16,12 +16,13 @@ import (
 )
 
 type Config struct {
-	Server     HTTPServer `yaml:"server"`
-	Admin      HTTPServer `yaml:"admin"`
-	Log        Log        `yaml:"log"`
-	Middleware Middleware `yaml:"middleware"`
-	Retry      Retry      `yaml:"retry"`
-	Routes     []Route    `yaml:"routes"`
+	Server         HTTPServer     `yaml:"server"`
+	Admin          HTTPServer     `yaml:"admin"`
+	Log            Log            `yaml:"log"`
+	Middleware     Middleware     `yaml:"middleware"`
+	Retry          Retry          `yaml:"retry"`
+	Routes         []Route        `yaml:"routes"`
+	CircuitBreaker CircuitBreaker `yaml:"circuit_breaker"`
 }
 
 type HTTPServer struct {
@@ -67,6 +68,12 @@ type Route struct {
 	PathPrefix  string   `yaml:"path_prefix"`
 	Upstreams   []string `yaml:"upstreams"`
 	StripPrefix bool     `yaml:"strip_prefix"`
+}
+
+type CircuitBreaker struct {
+	FailureThreshold int           `yaml:"failure_threshold"`
+	OpenTimeout      time.Duration `yaml:"open_timeout"`
+	FailureStatuses  []int         `yaml:"failure_statuses"`
 }
 
 func Load(path string) (Config, error) {
@@ -117,6 +124,11 @@ func defaults() Config {
 				AllowedHeaders: []string{"Accept", "Authorization", "Content-Type", "X-Request-ID"},
 			},
 		},
+		CircuitBreaker: CircuitBreaker{
+			FailureThreshold: 5,
+			OpenTimeout:      30 * time.Second,
+			FailureStatuses:  []int{502, 503, 504},
+		},
 	}
 }
 
@@ -139,6 +151,15 @@ func (c Config) Validate() error {
 	if c.Middleware.RequestTimeout < 0 {
 		return errors.New("middleware request_timeout must not be negative")
 	}
+	if c.CircuitBreaker.FailureThreshold <= 0 {
+		return errors.New("circuit breaker failure threshold must be positive")
+	}
+	if c.CircuitBreaker.OpenTimeout <= 0 {
+		return errors.New("circuit breaker open_timeout must be positive")
+	}
+	if err := validateStatuses("circuit breaker failure", c.CircuitBreaker.FailureStatuses); err != nil {
+		return err
+	}
 	if c.Retry.MaxAttempts < 1 || c.Retry.MaxAttempts > 10 {
 		return errors.New("retry max_attempts must be between 1 and 10")
 	}
@@ -151,15 +172,8 @@ func (c Config) Validate() error {
 	if len(c.Retry.Statuses) == 0 {
 		return errors.New("retry statuses must not be empty")
 	}
-	seenStatuses := make(map[int]struct{}, len(c.Retry.Statuses))
-	for _, status := range c.Retry.Statuses {
-		if status < 500 || status > 599 {
-			return fmt.Errorf("retry status %d must be a 5xx status", status)
-		}
-		if _, exists := seenStatuses[status]; exists {
-			return fmt.Errorf("duplicate retry status %d", status)
-		}
-		seenStatuses[status] = struct{}{}
+	if err := validateStatuses("retry", c.Retry.Statuses); err != nil {
+		return err
 	}
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(c.Log.Level)); err != nil {
@@ -313,6 +327,52 @@ func (r *Retry) UnmarshalYAML(value *yaml.Node) error {
 		"per_attempt_timeout": {p.PerAttemptTimeout, &r.PerAttemptTimeout},
 		"backoff":             {p.Backoff, &r.Backoff},
 	})
+}
+
+func (cb *CircuitBreaker) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "failure_threshold", "open_timeout", "failure_statuses"); err != nil {
+		return err
+	}
+	type plain struct {
+		FailureThreshold *int   `yaml:"failure_threshold"`
+		OpenTimeout      string `yaml:"open_timeout"`
+		FailureStatuses  []int  `yaml:"failure_statuses"`
+	}
+	var p plain
+	if err := value.Decode(&p); err != nil {
+		return err
+	}
+	if p.FailureThreshold != nil {
+		cb.FailureThreshold = *p.FailureThreshold
+	}
+	if p.FailureStatuses != nil {
+		cb.FailureStatuses = p.FailureStatuses
+	}
+	if p.OpenTimeout != "" {
+		duration, err := time.ParseDuration(p.OpenTimeout)
+		if err != nil {
+			return fmt.Errorf("open_timeout: %w", err)
+		}
+		cb.OpenTimeout = duration
+	}
+	return nil
+}
+
+func validateStatuses(name string, statuses []int) error {
+	if len(statuses) == 0 {
+		return fmt.Errorf("%s statuses must not be empty", name)
+	}
+	seen := make(map[int]struct{}, len(statuses))
+	for _, status := range statuses {
+		if status < 500 || status > 599 {
+			return fmt.Errorf("%s status %d must be a 5xx status", name, status)
+		}
+		if _, exists := seen[status]; exists {
+			return fmt.Errorf("duplicate %s status %d", name, status)
+		}
+		seen[status] = struct{}{}
+	}
+	return nil
 }
 
 func rejectUnknownFields(value *yaml.Node, allowed ...string) error {
