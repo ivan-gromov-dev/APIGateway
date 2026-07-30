@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoad(t *testing.T) {
@@ -23,6 +24,79 @@ func TestLoad(t *testing.T) {
 	}
 	if cfg.Server.ReadTimeout == 0 {
 		t.Fatal("expected default read timeout")
+	}
+}
+
+func TestLoadRetryConfiguration(t *testing.T) {
+	cfg, err := loadYAML(t, `
+retry:
+  max_attempts: 4
+  per_attempt_timeout: 750ms
+  backoff: 25ms
+  statuses: [500, 502, 504]
+routes:
+  - path_prefix: /api/
+    upstreams: [http://localhost:8081]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Retry.MaxAttempts != 4 ||
+		cfg.Retry.PerAttemptTimeout != 750*time.Millisecond ||
+		cfg.Retry.Backoff != 25*time.Millisecond {
+		t.Fatalf("retry configuration = %+v", cfg.Retry)
+	}
+	if len(cfg.Retry.Statuses) != 3 || cfg.Retry.Statuses[0] != 500 {
+		t.Fatalf("retry statuses = %v", cfg.Retry.Statuses)
+	}
+}
+
+func TestLoadMiddlewareConfiguration(t *testing.T) {
+	cfg, err := loadYAML(t, `
+middleware:
+  request_timeout: 3s
+  cors:
+    allowed_origins: [https://example.com]
+    allowed_methods: [GET]
+    allowed_headers: [X-Request-ID]
+routes:
+  - path_prefix: /api/
+    upstreams: [http://localhost:8081]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Middleware.RequestTimeout != 3*time.Second {
+		t.Fatalf("request timeout = %s", cfg.Middleware.RequestTimeout)
+	}
+	if len(cfg.Middleware.CORS.AllowedOrigins) != 1 ||
+		cfg.Middleware.CORS.AllowedOrigins[0] != "https://example.com" {
+		t.Fatalf("allowed origins = %v", cfg.Middleware.CORS.AllowedOrigins)
+	}
+	if len(cfg.Middleware.CORS.AllowedMethods) != 1 ||
+		cfg.Middleware.CORS.AllowedMethods[0] != "GET" {
+		t.Fatalf("allowed methods = %v", cfg.Middleware.CORS.AllowedMethods)
+	}
+	if len(cfg.Middleware.CORS.AllowedHeaders) != 1 ||
+		cfg.Middleware.CORS.AllowedHeaders[0] != "X-Request-ID" {
+		t.Fatalf("allowed headers = %v", cfg.Middleware.CORS.AllowedHeaders)
+	}
+}
+
+func TestLoadRejectsInvalidConfiguredDurations(t *testing.T) {
+	tests := map[string]string{
+		"retry attempt timeout": "retry:\n  per_attempt_timeout: eventually\n",
+		"retry backoff":         "retry:\n  backoff: later\n",
+		"middleware timeout":    "middleware:\n  request_timeout: soon\n",
+		"server timeout":        "server:\n  read_timeout: tomorrow\n",
+	}
+	for name, fragment := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := loadYAML(t, fragment+validRoutesUnlessPresent(fragment))
+			if err == nil {
+				t.Fatal("expected invalid duration error")
+			}
+		})
 	}
 }
 
