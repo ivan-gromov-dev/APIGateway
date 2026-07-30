@@ -128,6 +128,40 @@ func TestDoneCallbackIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestNeutralOutcomeDoesNotChangeClosedCircuitHistory(t *testing.T) {
+	breaker := newTestBreaker(t, 3, time.Minute)
+	completeAttempt(t, breaker, baseTime, OutcomeFailure, baseTime)
+	completeAttempt(t, breaker, baseTime, OutcomeNeutral, baseTime.Add(time.Second))
+
+	snapshot := breaker.Snapshot()
+	if snapshot.State != StateClosed || snapshot.ConsecutiveFailures != 1 {
+		t.Fatalf("snapshot = %+v, want closed with one failure", snapshot)
+	}
+}
+
+func TestNeutralProbeReopensCircuitAndRestartsTimeout(t *testing.T) {
+	timeout := time.Minute
+	breaker := openTestBreaker(t, timeout)
+	probeAt := baseTime.Add(timeout)
+	probe, allowed := breaker.Acquire(probeAt)
+	if !allowed {
+		t.Fatal("probe was rejected")
+	}
+	completedAt := probeAt.Add(10 * time.Second)
+	probe(OutcomeNeutral, completedAt)
+
+	snapshot := breaker.Snapshot()
+	if snapshot.State != StateOpen || !snapshot.OpenedAt.Equal(completedAt) {
+		t.Fatalf("snapshot = %+v, want reopened at %s", snapshot, completedAt)
+	}
+	if _, allowed := breaker.Acquire(completedAt.Add(timeout - time.Nanosecond)); allowed {
+		t.Fatal("request was allowed before restarted timeout")
+	}
+	if _, allowed := breaker.Acquire(completedAt.Add(timeout)); !allowed {
+		t.Fatal("probe was rejected after restarted timeout")
+	}
+}
+
 func TestStaleResultCannotChangeOpenedCircuit(t *testing.T) {
 	breaker := newTestBreaker(t, 1, time.Minute)
 	stale, _ := breaker.Acquire(baseTime)

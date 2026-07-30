@@ -30,7 +30,7 @@ func New(cfg config.Config, logger *slog.Logger) *Server {
 
 func (s *Server) Run(ctx context.Context) error {
 	collector := &metrics.Collector{}
-	proxyHandler, err := proxy.Handler(s.cfg.Routes, s.cfg.Retry, s.logger)
+	proxyHandler, err := proxy.Handler(s.cfg.Routes, s.cfg.Retry, s.cfg.CircuitBreaker, s.logger)
 	if err != nil {
 		return err
 	}

@@ -112,6 +112,8 @@ func (b *Breaker) completeClosed(outcome Outcome, completedAt time.Time) {
 		if b.consecutiveFailures >= b.failureThreshold {
 			b.open(completedAt)
 		}
+	case OutcomeNeutral:
+		// The attempt says nothing about upstream health.
 	}
 }
 
@@ -123,6 +125,8 @@ func (b *Breaker) completeHalfOpen(outcome Outcome, completedAt time.Time) {
 		b.openedAt = time.Time{}
 		b.generation++
 	case OutcomeFailure:
+		b.open(completedAt)
+	case OutcomeNeutral:
 		b.open(completedAt)
 	}
 }

@@ -38,6 +38,7 @@ changes.
   and semantic validation.
 - `internal/balancer` owns load-balancing contracts and algorithms.
 - `internal/circuitbreaker` owns the HTTP-independent circuit state machine.
+- `internal/upstream` owns per-instance URLs and health state.
 - `internal/proxy` owns route-specific reverse proxy construction.
 - `internal/middleware` owns composable HTTP cross-cutting behaviour.
 - `internal/metrics` and `internal/logger` own observability primitives.

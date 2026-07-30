@@ -35,6 +35,9 @@ const (
 	OutcomeSuccess Outcome = iota
 	// OutcomeFailure records a failed attempt.
 	OutcomeFailure
+	// OutcomeNeutral completes an attempt without changing closed-circuit
+	// failure history. A half-open probe returns to open and restarts cooldown.
+	OutcomeNeutral
 )
 
 // Snapshot is an immutable view of a Breaker.

@@ -2,24 +2,28 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Djunichi/APIGateway/internal/balancer"
+	"github.com/Djunichi/APIGateway/internal/circuitbreaker"
 	"github.com/Djunichi/APIGateway/internal/config"
 )
 
 type retryTransport struct {
-	base     http.RoundTripper
-	balancer balancer.Balancer
-	policy   config.Retry
-	statuses map[int]struct{}
+	base            http.RoundTripper
+	balancer        balancer.Balancer
+	policy          config.Retry
+	statuses        map[int]struct{}
+	failureStatuses map[int]struct{}
 }
 
-func newRetryTransport(base http.RoundTripper, upstreams balancer.Balancer, policy config.Retry) http.RoundTripper {
+func newRetryTransport(base http.RoundTripper, upstreams balancer.Balancer, policy config.Retry, failureStatuses []int) http.RoundTripper {
 	if policy.MaxAttempts < 1 {
 		policy.MaxAttempts = 1
 	}
@@ -30,7 +34,14 @@ func newRetryTransport(base http.RoundTripper, upstreams balancer.Balancer, poli
 	for _, status := range policy.Statuses {
 		statuses[status] = struct{}{}
 	}
-	return &retryTransport{base: base, balancer: upstreams, policy: policy, statuses: statuses}
+	passiveStatuses := make(map[int]struct{}, len(failureStatuses))
+	for _, status := range failureStatuses {
+		passiveStatuses[status] = struct{}{}
+	}
+	return &retryTransport{
+		base: base, balancer: upstreams, policy: policy,
+		statuses: statuses, failureStatuses: passiveStatuses,
+	}
 }
 
 func (t *retryTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -44,42 +55,64 @@ func (t *retryTransport) RoundTrip(request *http.Request) (*http.Response, error
 				return nil, err
 			}
 		}
-		attemptRequest, cancel, err := t.attemptRequest(request, attempt)
+		attemptRequest, cancel, done, err := t.attemptRequest(request, attempt)
 		if err != nil {
 			return nil, err
 		}
 		response, err := t.base.RoundTrip(attemptRequest)
+		completedAt := time.Now()
 		if err != nil {
+			if request.Context().Err() != nil {
+				done(circuitbreaker.OutcomeNeutral, completedAt)
+			} else {
+				done(circuitbreaker.OutcomeFailure, completedAt)
+			}
 			cancel()
 			if attempt+1 == attempts || request.Context().Err() != nil {
 				return nil, err
 			}
 			continue
 		}
+		if _, failed := t.failureStatuses[response.StatusCode]; failed {
+			done(circuitbreaker.OutcomeFailure, completedAt)
+		}
+		response.Body = &trackedBody{
+			ReadCloser: response.Body,
+			requestCtx: request.Context(),
+			done:       done,
+			cancel:     cancel,
+		}
 		if _, retry := t.statuses[response.StatusCode]; !retry || attempt+1 == attempts {
-			response.Body = &cancelOnClose{ReadCloser: response.Body, cancel: cancel}
 			return response, nil
 		}
 		_, _ = io.CopyN(io.Discard, response.Body, 32<<10)
 		_ = response.Body.Close()
-		cancel()
 	}
 	panic("unreachable")
 }
 
-func (t *retryTransport) attemptRequest(original *http.Request, attempt int) (*http.Request, context.CancelFunc, error) {
+func (t *retryTransport) attemptRequest(
+	original *http.Request,
+	attempt int,
+) (*http.Request, context.CancelFunc, circuitbreaker.DoneFunc, error) {
 	ctx, cancel := context.WithTimeout(original.Context(), t.policy.PerAttemptTimeout)
 	request := original.Clone(ctx)
-	request.URL = targetURL(t.balancer.Next(), original.URL)
 	if attempt > 0 && original.Body != nil && original.Body != http.NoBody {
 		body, err := original.GetBody()
 		if err != nil {
 			cancel()
-			return nil, func() {}, err
+			return nil, func() {}, nil, err
 		}
 		request.Body = body
 	}
-	return request, cancel, nil
+	selection, available := t.balancer.Next(time.Now())
+	if !available {
+		cancel()
+		return nil, func() {}, nil, errNoAvailableUpstream
+	}
+	target := selection.Target.URL()
+	request.URL = targetURL(&target, original.URL)
+	return request, cancel, selection.Done, nil
 }
 
 func retryableRequest(request *http.Request) bool {
@@ -137,13 +170,37 @@ func singleJoiningSlash(left, right string) string {
 	}
 }
 
-type cancelOnClose struct {
+type trackedBody struct {
 	io.ReadCloser
-	cancel context.CancelFunc
+	requestCtx context.Context
+	done       circuitbreaker.DoneFunc
+	cancel     context.CancelFunc
+	once       sync.Once
 }
 
-func (c *cancelOnClose) Close() error {
-	err := c.ReadCloser.Close()
-	c.cancel()
+func (b *trackedBody) Read(buffer []byte) (int, error) {
+	n, err := b.ReadCloser.Read(buffer)
+	if err != nil {
+		outcome := circuitbreaker.OutcomeFailure
+		if errors.Is(err, io.EOF) {
+			outcome = circuitbreaker.OutcomeSuccess
+		} else if b.requestCtx.Err() != nil {
+			outcome = circuitbreaker.OutcomeNeutral
+		}
+		b.complete(outcome)
+	}
+	return n, err
+}
+
+func (b *trackedBody) Close() error {
+	b.complete(circuitbreaker.OutcomeNeutral)
+	err := b.ReadCloser.Close()
+	b.cancel()
 	return err
+}
+
+func (b *trackedBody) complete(outcome circuitbreaker.Outcome) {
+	b.once.Do(func() {
+		b.done(outcome, time.Now())
+	})
 }

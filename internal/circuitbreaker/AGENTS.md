@@ -10,6 +10,8 @@ machine. HTTP result classification belongs to passive upstream health tracking.
 - A breaker moves through closed, open, and half-open states.
 - Open circuits admit exactly one half-open probe after the timeout.
 - Every admitted attempt receives an idempotent completion callback.
+- Neutral outcomes preserve closed-circuit history and safely return half-open
+  probes to open with a fresh cooldown.
 - Results from older state generations must not mutate the current state.
 - Callers provide timestamps; the package does not read or wait on wall-clock time.
 - All exported Breaker methods are safe for concurrent use.

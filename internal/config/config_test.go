@@ -56,6 +56,7 @@ func TestLoadCircuitBreakerConfiguration(t *testing.T) {
 circuit_breaker:
   failure_threshold: 7
   open_timeout: 45s
+  failure_statuses: [500, 502]
 routes:
   - path_prefix: /api/
     upstreams: [http://localhost:8081]
@@ -68,6 +69,9 @@ routes:
 	}
 	if cfg.CircuitBreaker.OpenTimeout != 45*time.Second {
 		t.Fatalf("open timeout = %s, want 45s", cfg.CircuitBreaker.OpenTimeout)
+	}
+	if len(cfg.CircuitBreaker.FailureStatuses) != 2 || cfg.CircuitBreaker.FailureStatuses[0] != 500 {
+		t.Fatalf("failure statuses = %v", cfg.CircuitBreaker.FailureStatuses)
 	}
 }
 
@@ -200,6 +204,12 @@ func TestValidateRuntimeSettings(t *testing.T) {
 		},
 		"circuit breaker threshold": func(cfg *Config) { cfg.CircuitBreaker.FailureThreshold = 0 },
 		"circuit breaker timeout":   func(cfg *Config) { cfg.CircuitBreaker.OpenTimeout = 0 },
+		"circuit breaker statuses": func(cfg *Config) {
+			cfg.CircuitBreaker.FailureStatuses = []int{429}
+		},
+		"duplicate circuit breaker status": func(cfg *Config) {
+			cfg.CircuitBreaker.FailureStatuses = []int{503, 503}
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {

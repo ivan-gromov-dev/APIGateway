@@ -12,10 +12,11 @@ creation, forwarding headers, prefix stripping, and proxy error responses.
 - `HandlerWithBalancer` accepts a factory for substitution and tests.
 - Every route receives a separate balancer instance.
 - `http.ServeMux` chooses the most specific registered prefix.
-- `ProxyRequest.SetURL` joins the selected upstream base URL with the incoming
-  request path.
+- The retry transport selects a health-eligible target for every attempt and
+  joins its base URL with the incoming request path.
 - `SetXForwarded` writes standardized forwarding information.
-- Proxy transport errors are logged and returned as HTTP 502.
+- Proxy transport errors are logged and returned as HTTP 502. Exhaustion of
+  available upstreams returns HTTP 503.
 
 Configuration validation normally guarantees valid URLs and non-empty upstream
 lists. Constructors still return contextual errors for direct callers.
@@ -30,15 +31,12 @@ lists. Constructors still return contextual errors for direct callers.
 - Do not leak internal errors or upstream topology in client responses.
 - A nil factory or nil balancer is a construction error.
 
-## Future retry work
+## Passive health tracking
 
-Retry belongs near proxy transport/execution, not inside a balancer. Define
-safe methods, replayable bodies, attempt limits, per-attempt timeouts, backoff,
-and upstream-result reporting before implementation. Do not retry after a
-response has been partially written.
-
-Health-aware selection may require evolving the balancer contract. Handle the
-no-upstream case explicitly rather than allowing `Next` to return `nil`.
+Classify every attempt independently from retry policy. Configured failure
+statuses and upstream transport errors are failures, client cancellation is
+neutral, and other received responses are successful. Complete the selected
+target callback before retrying or returning.
 
 ## Tests
 

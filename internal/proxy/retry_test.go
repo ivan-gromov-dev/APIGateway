@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Djunichi/APIGateway/internal/circuitbreaker"
 	"github.com/Djunichi/APIGateway/internal/config"
 )
 
@@ -43,12 +44,13 @@ func TestRetryTransportRetriesNetworkFailureAndReplaysBody(t *testing.T) {
 				Request:    request,
 			}, nil
 		}),
-		&fixedBalancer{target: target},
+		newFixedBalancer(t, target),
 		config.Retry{
 			MaxAttempts:       2,
 			PerAttemptTimeout: time.Second,
 			Statuses:          []int{http.StatusServiceUnavailable},
 		},
+		[]int{http.StatusServiceUnavailable},
 	)
 	request, err := http.NewRequest(http.MethodGet, "http://gateway/resource?id=42", bytes.NewBufferString("payload"))
 	if err != nil {
@@ -74,8 +76,9 @@ func TestRetryTransportReturnsBodyReplayError(t *testing.T) {
 			calls++
 			return nil, errors.New("network failure")
 		}),
-		&fixedBalancer{target: target},
+		newFixedBalancer(t, target),
 		config.Retry{MaxAttempts: 2, PerAttemptTimeout: time.Second},
+		[]int{http.StatusServiceUnavailable},
 	)
 	request, err := http.NewRequest(http.MethodGet, "http://gateway/resource", strings.NewReader("payload"))
 	if err != nil {
@@ -117,12 +120,74 @@ func TestNewRetryTransportAppliesDefensiveDefaults(t *testing.T) {
 				Request:    request,
 			}, nil
 		}),
-		&fixedBalancer{target: target},
+		newFixedBalancer(t, target),
 		config.Retry{},
+		nil,
 	).(*retryTransport)
 
 	if transport.policy.MaxAttempts != 1 || transport.policy.PerAttemptTimeout != 30*time.Second {
 		t.Fatalf("policy = %+v", transport.policy)
+	}
+}
+
+func TestRetryTransportRecordsClientCancellationAsNeutral(t *testing.T) {
+	targetURL, _ := url.Parse("http://upstream.example")
+	targetBalancer := newFixedBalancer(t, targetURL)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	transport := newRetryTransport(
+		roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			return nil, request.Context().Err()
+		}),
+		targetBalancer,
+		config.Retry{MaxAttempts: 1, PerAttemptTimeout: time.Second},
+		[]int{http.StatusServiceUnavailable},
+	)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://gateway/resource", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _ = transport.RoundTrip(request)
+	snapshot := targetBalancer.target.Snapshot()
+	if snapshot.State != circuitbreaker.StateClosed || snapshot.ConsecutiveFailures != 0 {
+		t.Fatalf("snapshot = %+v, want unchanged closed circuit", snapshot)
+	}
+}
+
+func TestRetryTransportRecordsResponseBodyFailure(t *testing.T) {
+	targetURL, _ := url.Parse("http://upstream.example")
+	targetBalancer := newFixedBalancer(t, targetURL)
+	bodyErr := errors.New("upstream stream reset")
+	transport := newRetryTransport(
+		roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       &failingBody{err: bodyErr},
+				Header:     make(http.Header),
+				Request:    request,
+			}, nil
+		}),
+		targetBalancer,
+		config.Retry{MaxAttempts: 1, PerAttemptTimeout: time.Second},
+		[]int{http.StatusServiceUnavailable},
+	)
+	request, err := http.NewRequest(http.MethodGet, "http://gateway/resource", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := transport.RoundTrip(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.ReadAll(response.Body)
+	if !errors.Is(err, bodyErr) {
+		t.Fatalf("body error = %v, want %v", err, bodyErr)
+	}
+	_ = response.Body.Close()
+
+	if got := targetBalancer.target.Snapshot().ConsecutiveFailures; got != 1 {
+		t.Fatalf("failures = %d, want 1", got)
 	}
 }
 
@@ -154,4 +219,16 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
+}
+
+type failingBody struct {
+	err error
+}
+
+func (b *failingBody) Read([]byte) (int, error) {
+	return 0, b.err
+}
+
+func (b *failingBody) Close() error {
+	return nil
 }
