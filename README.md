@@ -18,6 +18,7 @@ operational endpoints, graceful shutdown, and real-network integration testing.
 - Unit tests, real-network integration tests, and load-test scenarios
 - Retries across upstreams for safe, replayable requests
 - Passive upstream health tracking with per-instance circuit breakers
+- Redis-backed global and per-route Token Bucket rate limiting
 - Docker Compose demo with Users and Billing services
 - Parallel GitHub Actions jobs for build, unit tests, and integration tests
 
@@ -118,6 +119,13 @@ are skipped. If no upstream is available, the gateway returns `503 Service
 Unavailable`. Client cancellation is neutral and does not penalize upstream
 health.
 
+Rate limiting uses an atomic Redis script and is enabled in the Docker demo.
+Global rules protect gateway capacity; route rules protect individual services.
+Built-in keys are `global` and `client_ip`, and filters are `all` and
+`writes_only`. Exceeding a rule returns `429` with `Retry-After`. The gateway
+talks through the Redis protocol, so the backend may be Redis itself or another
+Redis-compatible server.
+
 Environment variables override selected configuration values:
 
 ```text
@@ -142,12 +150,12 @@ GATEWAY_LOG_LEVEL=debug go run ./cmd/gateway -config configs/gateway.yaml
 
 The administrative server listens on `:9090` by default:
 
-| Endpoint | Purpose |
-|---|---|
-| `GET /healthz` | Process liveness |
-| `GET /readyz` | Readiness; returns `503` before startup and during shutdown |
-| `GET /metrics` | Prometheus-compatible gateway metrics |
-| `GET /debug/pprof/` | Go runtime profiler |
+| Endpoint            | Purpose                                                     |
+| ------------------- | ----------------------------------------------------------- |
+| `GET /healthz`      | Process liveness                                            |
+| `GET /readyz`       | Readiness; returns `503` before startup and during shutdown |
+| `GET /metrics`      | Prometheus-compatible gateway metrics                       |
+| `GET /debug/pprof/` | Go runtime profiler                                         |
 
 The gateway reports ready only after both public and admin listeners have been
 opened successfully. It becomes unready before graceful shutdown begins.
@@ -223,11 +231,11 @@ do not provide stable performance measurements.
 
 GitHub Actions runs three independent jobs in parallel:
 
-| Job | Checks |
-|---|---|
-| `build` | Builds Gateway, Users, and Billing binaries |
-| `unit-tests` | Runs `go vet`, race-enabled unit tests, and per-package coverage gates |
-| `integration-tests` | Runs the real-network integration suite with the race detector |
+| Job                 | Checks                                                                 |
+| ------------------- | ---------------------------------------------------------------------- |
+| `build`             | Builds Gateway, Users, and Billing binaries                            |
+| `unit-tests`        | Runs `go vet`, race-enabled unit tests, and per-package coverage gates |
+| `integration-tests` | Runs the real-network integration suite with the race detector         |
 
 ## AI agent harness
 
@@ -301,9 +309,6 @@ It is stored in [`.codex/skills/review-api-gateway`](.codex/skills/review-api-ga
 
 ## Roadmap
 
-- Retries with safe-method and replayability rules
-- Circuit breaker and passive upstream health tracking
-- Rate limiting
 - JWT authentication and response caching
 - Configuration reload and OpenTelemetry
 - gRPC proxying and service discovery

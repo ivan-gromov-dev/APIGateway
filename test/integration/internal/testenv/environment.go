@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Djunichi/APIGateway/internal/config"
+	"github.com/Djunichi/APIGateway/internal/ratelimit"
 	"github.com/Djunichi/APIGateway/internal/server"
 )
 
@@ -25,6 +26,15 @@ type settings struct {
 	retry        config.Retry
 	circuit      config.CircuitBreaker
 	userStatuses map[int][]int
+	rateLimit    config.RateLimit
+	rateStore    ratelimit.Store
+}
+
+// WithRateLimit configures rate limiting with a scenario-provided store.
+func WithRateLimit(cfg config.RateLimit, store ratelimit.Store) Option {
+	return func(settings *settings) {
+		settings.rateLimit, settings.rateStore = cfg, store
+	}
 }
 
 // WithCircuitBreaker configures passive circuit breaker tracking.
@@ -135,6 +145,7 @@ func New(t testing.TB, options ...Option) *Environment {
 		},
 		Retry:          cfg.retry,
 		CircuitBreaker: cfg.circuit,
+		RateLimit:      cfg.rateLimit,
 		Routes:         routes,
 	}
 
@@ -147,7 +158,15 @@ func New(t testing.TB, options ...Option) *Environment {
 		cancel:        cancel,
 		runResult:     make(chan error, 1),
 	}
-	gateway := server.New(gatewayConfig, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	var serverOptions []server.Option
+	if cfg.rateStore != nil {
+		registry := ratelimit.NewRegistry()
+		if err := registry.RegisterStore(cfg.rateLimit.DefaultBackend, cfg.rateStore); err != nil {
+			t.Fatal(err)
+		}
+		serverOptions = append(serverOptions, server.WithRateLimitRegistry(registry))
+	}
+	gateway := server.New(gatewayConfig, slog.New(slog.NewTextHandler(io.Discard, nil)), serverOptions...)
 	go func() {
 		environment.runResult <- gateway.Run(ctx)
 	}()

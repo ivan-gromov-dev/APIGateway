@@ -23,6 +23,7 @@ type Config struct {
 	Retry          Retry          `yaml:"retry"`
 	Routes         []Route        `yaml:"routes"`
 	CircuitBreaker CircuitBreaker `yaml:"circuit_breaker"`
+	RateLimit      RateLimit      `yaml:"rate_limit"`
 }
 
 type HTTPServer struct {
@@ -65,9 +66,41 @@ func (c *CORS) UnmarshalYAML(value *yaml.Node) error {
 }
 
 type Route struct {
-	PathPrefix  string   `yaml:"path_prefix"`
-	Upstreams   []string `yaml:"upstreams"`
-	StripPrefix bool     `yaml:"strip_prefix"`
+	PathPrefix  string          `yaml:"path_prefix"`
+	Upstreams   []string        `yaml:"upstreams"`
+	StripPrefix bool            `yaml:"strip_prefix"`
+	RateLimits  []RateLimitRule `yaml:"rate_limits"`
+}
+
+type RateLimit struct {
+	Enabled          bool            `yaml:"enabled"`
+	DefaultBackend   string          `yaml:"default_backend"`
+	OnBackendError   string          `yaml:"on_backend_error"`
+	OperationTimeout time.Duration   `yaml:"operation_timeout"`
+	Redis            Redis           `yaml:"redis"`
+	Rules            []RateLimitRule `yaml:"rules"`
+}
+
+type Redis struct {
+	Address   string `yaml:"address"`
+	Username  string `yaml:"username"`
+	Password  string `yaml:"password"`
+	Database  int    `yaml:"database"`
+	KeyPrefix string `yaml:"key_prefix"`
+}
+
+type RateLimitRule struct {
+	Name        string      `yaml:"name"`
+	Backend     string      `yaml:"backend"`
+	Key         string      `yaml:"key"`
+	Filter      string      `yaml:"filter"`
+	TokenBucket TokenBucket `yaml:"token_bucket"`
+}
+
+type TokenBucket struct {
+	RequestsPerSecond float64       `yaml:"requests_per_second"`
+	Burst             int           `yaml:"burst"`
+	TTL               time.Duration `yaml:"ttl"`
 }
 
 type CircuitBreaker struct {
@@ -129,6 +162,11 @@ func defaults() Config {
 			OpenTimeout:      30 * time.Second,
 			FailureStatuses:  []int{502, 503, 504},
 		},
+		RateLimit: RateLimit{
+			DefaultBackend: "redis", OnBackendError: "allow",
+			OperationTimeout: 100 * time.Millisecond,
+			Redis:            Redis{Address: "localhost:6379", KeyPrefix: "gateway:ratelimit"},
+		},
 	}
 }
 
@@ -158,6 +196,9 @@ func (c Config) Validate() error {
 		return errors.New("circuit breaker open_timeout must be positive")
 	}
 	if err := validateStatuses("circuit breaker failure", c.CircuitBreaker.FailureStatuses); err != nil {
+		return err
+	}
+	if err := c.validateRateLimits(); err != nil {
 		return err
 	}
 	if c.Retry.MaxAttempts < 1 || c.Retry.MaxAttempts > 10 {
@@ -207,6 +248,51 @@ func (c Config) Validate() error {
 				return fmt.Errorf("route %d: duplicate upstream %q", i, rawUpstream)
 			}
 			seenUpstreams[upstream.String()] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func (c Config) validateRateLimits() error {
+	if c.RateLimit.OnBackendError != "allow" && c.RateLimit.OnBackendError != "deny" {
+		return errors.New("rate_limit on_backend_error must be allow or deny")
+	}
+	if c.RateLimit.OperationTimeout <= 0 {
+		return errors.New("rate_limit operation_timeout must be positive")
+	}
+	if c.RateLimit.Enabled {
+		if c.RateLimit.DefaultBackend == "" {
+			return errors.New("enabled rate_limit requires a default backend")
+		}
+		if c.RateLimit.DefaultBackend == "redis" &&
+			(c.RateLimit.Redis.Address == "" || c.RateLimit.Redis.KeyPrefix == "") {
+			return errors.New("Redis rate limit backend requires address and key prefix")
+		}
+	}
+	seen := make(map[string]struct{})
+	validate := func(rule RateLimitRule) error {
+		if rule.Name == "" || rule.Key == "" || rule.Filter == "" {
+			return errors.New("rate limit rule name, key, and filter are required")
+		}
+		if _, ok := seen[rule.Name]; ok {
+			return fmt.Errorf("duplicate rate limit rule %q", rule.Name)
+		}
+		seen[rule.Name] = struct{}{}
+		if rule.TokenBucket.RequestsPerSecond <= 0 || rule.TokenBucket.Burst <= 0 || rule.TokenBucket.TTL <= 0 {
+			return fmt.Errorf("rate limit rule %q token bucket values must be positive", rule.Name)
+		}
+		return nil
+	}
+	for _, rule := range c.RateLimit.Rules {
+		if err := validate(rule); err != nil {
+			return err
+		}
+	}
+	for _, route := range c.Routes {
+		for _, rule := range route.RateLimits {
+			if err := validate(rule); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -354,6 +440,75 @@ func (cb *CircuitBreaker) UnmarshalYAML(value *yaml.Node) error {
 			return fmt.Errorf("open_timeout: %w", err)
 		}
 		cb.OpenTimeout = duration
+	}
+	return nil
+}
+
+func (r *RateLimit) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "enabled", "default_backend", "on_backend_error", "operation_timeout", "redis", "rules"); err != nil {
+		return err
+	}
+	type plain struct {
+		Enabled          bool            `yaml:"enabled"`
+		DefaultBackend   string          `yaml:"default_backend"`
+		OnBackendError   string          `yaml:"on_backend_error"`
+		OperationTimeout string          `yaml:"operation_timeout"`
+		Redis            Redis           `yaml:"redis"`
+		Rules            []RateLimitRule `yaml:"rules"`
+	}
+	var p plain
+	if err := value.Decode(&p); err != nil {
+		return err
+	}
+	r.Enabled = p.Enabled
+	if p.DefaultBackend != "" {
+		r.DefaultBackend = p.DefaultBackend
+	}
+	if p.OnBackendError != "" {
+		r.OnBackendError = p.OnBackendError
+	}
+	if p.Redis.Address != "" {
+		r.Redis = p.Redis
+	}
+	r.Rules = p.Rules
+	if p.OperationTimeout != "" {
+		duration, err := time.ParseDuration(p.OperationTimeout)
+		if err != nil {
+			return fmt.Errorf("operation_timeout: %w", err)
+		}
+		r.OperationTimeout = duration
+	}
+	return nil
+}
+
+func (r *RateLimitRule) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "name", "backend", "key", "filter", "token_bucket"); err != nil {
+		return err
+	}
+	type plain RateLimitRule
+	return value.Decode((*plain)(r))
+}
+
+func (t *TokenBucket) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "requests_per_second", "burst", "ttl"); err != nil {
+		return err
+	}
+	type plain struct {
+		RequestsPerSecond float64 `yaml:"requests_per_second"`
+		Burst             int     `yaml:"burst"`
+		TTL               string  `yaml:"ttl"`
+	}
+	var p plain
+	if err := value.Decode(&p); err != nil {
+		return err
+	}
+	t.RequestsPerSecond, t.Burst = p.RequestsPerSecond, p.Burst
+	if p.TTL != "" {
+		duration, err := time.ParseDuration(p.TTL)
+		if err != nil {
+			return fmt.Errorf("ttl: %w", err)
+		}
+		t.TTL = duration
 	}
 	return nil
 }

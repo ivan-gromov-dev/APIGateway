@@ -15,6 +15,7 @@ import (
 
 	"github.com/Djunichi/APIGateway/internal/config"
 	"github.com/Djunichi/APIGateway/internal/metrics"
+	"github.com/Djunichi/APIGateway/internal/ratelimit"
 )
 
 func TestReadinessHandlerReflectsState(t *testing.T) {
@@ -57,6 +58,35 @@ func TestRunReportsAdminListenerError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "listen on admin address") {
 		t.Fatalf("error = %v, want admin listener error", err)
 	}
+}
+
+func TestRunBuildsRateLimitsFromExternalRegistry(t *testing.T) {
+	occupied := listen(t)
+	defer occupied.Close()
+	cfg := testConfig(occupied.Addr().String(), freeAddress(t), "http://localhost:8081")
+	cfg.RateLimit = config.RateLimit{
+		Enabled: true, DefaultBackend: "custom", OnBackendError: "allow",
+		OperationTimeout: time.Second,
+		Rules: []config.RateLimitRule{{
+			Name: "global", Key: "global", Filter: "all",
+			TokenBucket: config.TokenBucket{RequestsPerSecond: 1, Burst: 1, TTL: time.Minute},
+		}},
+	}
+	registry := ratelimit.NewRegistry()
+	if err := registry.RegisterStore("custom", serverStore{}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := New(cfg, discardLogger(), WithRateLimitRegistry(registry)).Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "listen on public address") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+type serverStore struct{}
+
+func (serverStore) Take(context.Context, ratelimit.TakeRequest) (ratelimit.TakeResult, error) {
+	return ratelimit.TakeResult{Allowed: true}, nil
 }
 
 func TestRunGracefullyWaitsForActiveRequest(t *testing.T) {

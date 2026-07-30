@@ -27,6 +27,16 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+func TestExampleConfigurations(t *testing.T) {
+	for _, name := range []string{"gateway.yaml", "gateway.docker.yaml"} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(filepath.Join("..", "..", "configs", name)); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestLoadRetryConfiguration(t *testing.T) {
 	cfg, err := loadYAML(t, `
 retry:
@@ -72,6 +82,46 @@ routes:
 	}
 	if len(cfg.CircuitBreaker.FailureStatuses) != 2 || cfg.CircuitBreaker.FailureStatuses[0] != 500 {
 		t.Fatalf("failure statuses = %v", cfg.CircuitBreaker.FailureStatuses)
+	}
+}
+
+func TestLoadRateLimitConfiguration(t *testing.T) {
+	cfg, err := loadYAML(t, `
+rate_limit:
+  enabled: true
+  default_backend: redis
+  on_backend_error: deny
+  operation_timeout: 50ms
+  redis:
+    address: redis:6379
+    database: 1
+    key_prefix: test
+  rules:
+    - name: global
+      key: global
+      filter: all
+      token_bucket:
+        requests_per_second: 10
+        burst: 20
+        ttl: 1m
+routes:
+  - path_prefix: /api/
+    upstreams: [http://localhost:8081]
+    rate_limits:
+      - name: route
+        key: client_ip
+        filter: writes_only
+        token_bucket:
+          requests_per_second: 2
+          burst: 4
+          ttl: 30s
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.RateLimit.Enabled || cfg.RateLimit.OperationTimeout != 50*time.Millisecond ||
+		len(cfg.RateLimit.Rules) != 1 || len(cfg.Routes[0].RateLimits) != 1 {
+		t.Fatalf("rate limit = %+v routes=%+v", cfg.RateLimit, cfg.Routes)
 	}
 }
 
@@ -125,11 +175,13 @@ routes:
 
 func TestLoadRejectsInvalidConfiguredDurations(t *testing.T) {
 	tests := map[string]string{
-		"retry attempt timeout": "retry:\n  per_attempt_timeout: eventually\n",
-		"retry backoff":         "retry:\n  backoff: later\n",
-		"middleware timeout":    "middleware:\n  request_timeout: soon\n",
-		"server timeout":        "server:\n  read_timeout: tomorrow\n",
-		"circuit open timeout":  "circuit_breaker:\n  open_timeout: someday\n",
+		"retry attempt timeout":  "retry:\n  per_attempt_timeout: eventually\n",
+		"retry backoff":          "retry:\n  backoff: later\n",
+		"middleware timeout":     "middleware:\n  request_timeout: soon\n",
+		"server timeout":         "server:\n  read_timeout: tomorrow\n",
+		"circuit open timeout":   "circuit_breaker:\n  open_timeout: someday\n",
+		"rate operation timeout": "rate_limit:\n  operation_timeout: someday\n",
+		"token bucket ttl":       "rate_limit:\n  rules:\n    - name: x\n      key: global\n      filter: all\n      token_bucket:\n        requests_per_second: 1\n        burst: 1\n        ttl: someday\n",
 	}
 	for name, fragment := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -209,6 +261,16 @@ func TestValidateRuntimeSettings(t *testing.T) {
 		},
 		"duplicate circuit breaker status": func(cfg *Config) {
 			cfg.CircuitBreaker.FailureStatuses = []int{503, 503}
+		},
+		"rate error policy":    func(cfg *Config) { cfg.RateLimit.OnBackendError = "sometimes" },
+		"rate timeout":         func(cfg *Config) { cfg.RateLimit.OperationTimeout = 0 },
+		"rate enabled backend": func(cfg *Config) { cfg.RateLimit.Enabled = true; cfg.RateLimit.DefaultBackend = "" },
+		"rate invalid rule": func(cfg *Config) {
+			cfg.RateLimit.Rules = []RateLimitRule{{Name: "x", Key: "global", Filter: "all"}}
+		},
+		"rate duplicate rule": func(cfg *Config) {
+			rule := RateLimitRule{Name: "x", Key: "global", Filter: "all", TokenBucket: TokenBucket{RequestsPerSecond: 1, Burst: 1, TTL: time.Minute}}
+			cfg.RateLimit.Rules = []RateLimitRule{rule, rule}
 		},
 	}
 	for name, mutate := range tests {
