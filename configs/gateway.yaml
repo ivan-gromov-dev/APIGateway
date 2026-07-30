@@ -32,6 +32,17 @@ circuit_breaker:
   open_timeout: 30s
   failure_statuses: [502, 503, 504]
 
+rate_limit:
+  enabled: false
+  default_backend: redis
+  on_backend_error: allow
+  operation_timeout: 100ms
+  redis:
+    address: localhost:6379
+    database: 0
+    key_prefix: gateway:ratelimit
+  rules: []
+
 routes:
   - path_prefix: /api/billing/
     upstreams:

@@ -16,23 +16,45 @@ import (
 	"github.com/Djunichi/APIGateway/internal/metrics"
 	"github.com/Djunichi/APIGateway/internal/middleware"
 	"github.com/Djunichi/APIGateway/internal/proxy"
+	"github.com/Djunichi/APIGateway/internal/ratelimit"
+	redisstore "github.com/Djunichi/APIGateway/internal/ratestore/redis"
 )
 
 type Server struct {
-	cfg    config.Config
-	logger *slog.Logger
-	ready  atomic.Bool
+	cfg          config.Config
+	logger       *slog.Logger
+	ready        atomic.Bool
+	rateRegistry *ratelimit.Registry
 }
 
-func New(cfg config.Config, logger *slog.Logger) *Server {
-	return &Server{cfg: cfg, logger: logger}
+type Option func(*Server)
+
+func WithRateLimitRegistry(registry *ratelimit.Registry) Option {
+	return func(server *Server) { server.rateRegistry = registry }
+}
+
+func New(cfg config.Config, logger *slog.Logger, options ...Option) *Server {
+	server := &Server{cfg: cfg, logger: logger}
+	for _, option := range options {
+		option(server)
+	}
+	return server
 }
 
 func (s *Server) Run(ctx context.Context) error {
 	collector := &metrics.Collector{}
-	proxyHandler, err := proxy.Handler(s.cfg.Routes, s.cfg.Retry, s.cfg.CircuitBreaker, s.logger)
+	registry, closeRateLimit, err := s.prepareRateLimit(ctx)
 	if err != nil {
 		return err
+	}
+	defer closeRateLimit()
+	proxyHandler, err := proxy.HandlerWithRateLimit(s.cfg.Routes, s.cfg.Retry, s.cfg.CircuitBreaker, s.cfg.RateLimit, registry, s.logger)
+	if err != nil {
+		return err
+	}
+	globalRateLimit, err := middleware.BuildRateLimit(s.cfg.RateLimit.Rules, s.cfg.RateLimit, registry)
+	if err != nil {
+		return fmt.Errorf("build global rate limit: %w", err)
 	}
 	handler := middleware.Chain(
 		proxyHandler,
@@ -41,6 +63,7 @@ func (s *Server) Run(ctx context.Context) error {
 		middleware.Logging(s.logger, collector),
 		middleware.Timeout(s.cfg.Middleware.RequestTimeout),
 		middleware.CORS(s.cfg.Middleware.CORS),
+		globalRateLimit,
 	)
 
 	app := httpServer(s.cfg.Server, handler)
@@ -82,6 +105,70 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	return errors.Join(runErr, shutdownErr)
+}
+
+func (s *Server) prepareRateLimit(ctx context.Context) (*ratelimit.Registry, func(), error) {
+	if !s.cfg.RateLimit.Enabled {
+		return ratelimit.NewRegistry(), func() {}, nil
+	}
+	registry := s.rateRegistry
+	closeStore := func() {}
+	if registry == nil {
+		if s.cfg.RateLimit.DefaultBackend != "redis" {
+			return nil, func() {}, fmt.Errorf(
+				"rate limit backend %q requires external registration",
+				s.cfg.RateLimit.DefaultBackend,
+			)
+		}
+		registry = ratelimit.NewRegistry()
+		store := redisstore.New(redisstore.Config{
+			Address: s.cfg.RateLimit.Redis.Address, Username: s.cfg.RateLimit.Redis.Username,
+			Password: s.cfg.RateLimit.Redis.Password, Database: s.cfg.RateLimit.Redis.Database,
+			KeyPrefix: s.cfg.RateLimit.Redis.KeyPrefix,
+		})
+		pingCtx, cancel := context.WithTimeout(ctx, s.cfg.RateLimit.OperationTimeout)
+		err := store.Ping(pingCtx)
+		cancel()
+		if err != nil {
+			_ = store.Close()
+			return nil, func() {}, fmt.Errorf("connect rate limit Redis: %w", err)
+		}
+		if err := registry.RegisterStore(s.cfg.RateLimit.DefaultBackend, store); err != nil {
+			_ = store.Close()
+			return nil, func() {}, err
+		}
+		closeStore = func() { _ = store.Close() }
+	}
+	if err := registerBuiltins(registry); err != nil {
+		closeStore()
+		return nil, func() {}, err
+	}
+	registry.Freeze()
+	return registry, closeStore, nil
+}
+
+func registerBuiltins(registry *ratelimit.Registry) error {
+	if _, ok := registry.Key("global"); !ok {
+		if err := registry.RegisterKey("global", middleware.GlobalKey); err != nil {
+			return err
+		}
+	}
+	if _, ok := registry.Key("client_ip"); !ok {
+		if err := registry.RegisterKey("client_ip", middleware.ClientIPKey); err != nil {
+			return err
+		}
+	}
+	if _, ok := registry.Filter("all"); !ok {
+		if err := registry.RegisterFilter("all", middleware.AllRequests); err != nil {
+			return err
+		}
+	}
+	if _, ok := registry.Filter("writes_only"); !ok {
+		if err := registry.RegisterFilter("writes_only", middleware.WritesOnly); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func httpServer(cfg config.HTTPServer, handler http.Handler) *http.Server {

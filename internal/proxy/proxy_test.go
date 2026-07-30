@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"github.com/Djunichi/APIGateway/internal/balancer"
 	"github.com/Djunichi/APIGateway/internal/circuitbreaker"
 	"github.com/Djunichi/APIGateway/internal/config"
+	"github.com/Djunichi/APIGateway/internal/ratelimit"
 	upstreammodel "github.com/Djunichi/APIGateway/internal/upstream"
 )
 
@@ -209,6 +211,45 @@ func TestHandlerReturnsServiceUnavailableWhenAllUpstreamsAreOpen(t *testing.T) {
 	if second.Code != http.StatusServiceUnavailable || second.Body.String() != "Service Unavailable\n" {
 		t.Fatalf("second response = %d %q", second.Code, second.Body.String())
 	}
+}
+
+func TestHandlerAppliesRouteRateLimit(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	registry := ratelimit.NewRegistry()
+	if err := registry.RegisterStore("test", rejectingStore{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterKey("global", func(*http.Request) (string, error) { return "global", nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterFilter("all", func(*http.Request) bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	rate := config.RateLimit{Enabled: true, DefaultBackend: "test", OnBackendError: "deny", OperationTimeout: time.Second}
+	handler, err := HandlerWithRateLimit([]config.Route{{
+		PathPrefix: "/api/", Upstreams: []string{upstream.URL},
+		RateLimits: []config.RateLimitRule{{
+			Name: "route", Key: "global", Filter: "all",
+			TokenBucket: config.TokenBucket{RequestsPerSecond: 1, Burst: 1, TTL: time.Minute},
+		}},
+	}}, testRetry(), testCircuit(), rate, registry, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/", nil))
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("status=%d", response.Code)
+	}
+}
+
+type rejectingStore struct{}
+
+func (rejectingStore) Take(context.Context, ratelimit.TakeRequest) (ratelimit.TakeResult, error) {
+	return ratelimit.TakeResult{Allowed: false, RetryAfter: time.Second}, nil
 }
 
 func TestHandlerRejectsRouteWithoutUpstreams(t *testing.T) {

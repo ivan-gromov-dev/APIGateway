@@ -14,13 +14,21 @@ import (
 	"github.com/Djunichi/APIGateway/internal/balancer"
 	"github.com/Djunichi/APIGateway/internal/circuitbreaker"
 	"github.com/Djunichi/APIGateway/internal/config"
+	"github.com/Djunichi/APIGateway/internal/middleware"
+	"github.com/Djunichi/APIGateway/internal/ratelimit"
 	"github.com/Djunichi/APIGateway/internal/upstream"
 )
 
 var errNoAvailableUpstream = errors.New("no available upstream")
 
 func Handler(routes []config.Route, retry config.Retry, circuit config.CircuitBreaker, logger *slog.Logger) (http.Handler, error) {
-	return HandlerWithBalancer(routes, retry, circuit, logger, func(upstreams []*upstream.Target) (balancer.Balancer, error) {
+	return handlerWithBalancer(routes, retry, circuit, config.RateLimit{}, nil, logger, func(upstreams []*upstream.Target) (balancer.Balancer, error) {
+		return balancer.NewRoundRobin(upstreams)
+	})
+}
+
+func HandlerWithRateLimit(routes []config.Route, retry config.Retry, circuit config.CircuitBreaker, rate config.RateLimit, registry *ratelimit.Registry, logger *slog.Logger) (http.Handler, error) {
+	return handlerWithBalancer(routes, retry, circuit, rate, registry, logger, func(upstreams []*upstream.Target) (balancer.Balancer, error) {
 		return balancer.NewRoundRobin(upstreams)
 	})
 }
@@ -45,6 +53,14 @@ func HandlerWithBalancer(
 	retry config.Retry,
 	circuit config.CircuitBreaker,
 	logger *slog.Logger,
+	newBalancer balancer.Factory,
+) (http.Handler, error) {
+	return handlerWithBalancer(routes, retry, circuit, config.RateLimit{}, nil, logger, newBalancer)
+}
+
+func handlerWithBalancer(
+	routes []config.Route, retry config.Retry, circuit config.CircuitBreaker,
+	rate config.RateLimit, registry *ratelimit.Registry, logger *slog.Logger,
 	newBalancer balancer.Factory,
 ) (http.Handler, error) {
 	if newBalancer == nil {
@@ -96,6 +112,13 @@ func HandlerWithBalancer(
 		var handler http.Handler = proxy
 		if route.StripPrefix {
 			handler = http.StripPrefix(strings.TrimSuffix(route.PathPrefix, "/"), handler)
+		}
+		if rate.Enabled && len(route.RateLimits) > 0 {
+			rateMiddleware, err := middleware.BuildRateLimit(route.RateLimits, rate, registry)
+			if err != nil {
+				return nil, fmt.Errorf("build rate limit for route %q: %w", route.PathPrefix, err)
+			}
+			handler = rateMiddleware(handler)
 		}
 		mux.Handle(route.PathPrefix, handler)
 	}

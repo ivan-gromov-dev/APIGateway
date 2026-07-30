@@ -26,11 +26,36 @@ circuit_breaker:
   failure_threshold: 5
   open_timeout: 30s
   failure_statuses: [502, 503, 504]
+rate_limit:
+  enabled: true
+  default_backend: redis
+  on_backend_error: allow
+  operation_timeout: 100ms
+  redis:
+    address: redis:6379
+    database: 0
+    key_prefix: gateway:ratelimit
+  rules:
+    - name: gateway-capacity
+      key: global
+      filter: all
+      token_bucket:
+        requests_per_second: 1000
+        burst: 1500
+        ttl: 10m
 routes:
   - path_prefix: /api/billing/
     upstreams:
       - http://billing:8091
     strip_prefix: true
+    rate_limits:
+      - name: billing-writes
+        key: client_ip
+        filter: writes_only
+        token_bucket:
+          requests_per_second: 5
+          burst: 10
+          ttl: 10m
   - path_prefix: /api/
     upstreams:
       - http://backend-1:8081
