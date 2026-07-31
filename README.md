@@ -1,50 +1,67 @@
 # API Gateway
 
-A production-minded HTTP API gateway written in Go. The project demonstrates
-reverse proxying, prefix routing, concurrent load balancing, middleware,
-operational endpoints, graceful shutdown, and real-network integration testing.
+[![CI](https://github.com/Djunichi/APIGateway/actions/workflows/ci.yml/badge.svg)](https://github.com/Djunichi/APIGateway/actions/workflows/ci.yml)
 
-## Features
+A production-minded HTTP API gateway written in Go. It combines reverse
+proxying, resilience, authentication, distributed rate limiting, response
+caching, and end-to-end observability in a repository that can be started
+locally with Docker Compose.
 
-- YAML configuration with environment-variable overrides and strict validation
-- HTTP reverse proxy with path-prefix routing and prefix stripping
-- Multiple upstream instances with a concurrent Round Robin balancer
-- Replaceable load-balancer interface and per-route balancer instances
-- Separate public and administrative HTTP servers
-- Graceful shutdown with readiness state transitions
-- Structured logging with `log/slog`
-- Request ID propagation, panic recovery, request logging, timeout, and CORS
-- Prometheus metrics for HTTP RED signals, routes, upstream attempts, retries,
-  authentication, caching, rate limiting, Go runtime and process state; plus `pprof`
-- OpenTelemetry traces with W3C context propagation and OTLP export
-- Unit tests, real-network integration tests, and load-test scenarios
-- Retries across upstreams for safe, replayable requests
-- Passive upstream health tracking with per-instance circuit breakers
-- Redis-backed global and per-route Token Bucket rate limiting
-- Route-level JWT authentication using asymmetric signatures and JWKS
-- Redis-backed response caching for explicitly enabled public routes
-- Docker Compose demo with Users, Billing, Redis, and a demo identity service
-- Parallel GitHub Actions jobs for build, unit tests, and integration tests
+This project is intentionally smaller than a general-purpose edge proxy. Its
+goal is to make gateway behaviour explicit, testable, and easy to inspect: the
+retry rules, circuit state, Redis failure policies, middleware ordering, and
+shutdown lifecycle are all visible in application code.
+
+## What is included
+
+- prefix routing with longest-prefix precedence and optional prefix stripping;
+- concurrent per-route Round Robin balancing across multiple upstreams;
+- retries restricted to safe, replayable requests;
+- passive upstream health tracking with a circuit breaker per instance;
+- global and per-route Redis-backed Token Bucket rate limiting;
+- route-level JWT validation against external JWKS providers;
+- Redis-backed response caching with authorization and privacy safeguards;
+- request IDs, recovery, timeout, CORS, and structured JSON logging;
+- Prometheus RED metrics, `pprof`, and OpenTelemetry traces;
+- separate public and administrative listeners with graceful shutdown;
+- strict YAML configuration and environment overrides;
+- unit, real-network integration, race, coverage, and load-test workflows.
 
 ## Architecture
 
-```text
-                              ┌───────────────┐
-                         ┌───►│ Users #1     │
-                         │    └───────────────┘
-                         │    ┌───────────────┐
-Client ──► API Gateway ──┼───►│ Users #2     │
-             │           │    └───────────────┘
-             │           │    ┌───────────────┐
-             │           └───►│ Users #3     │
-             │                └───────────────┘
-             │                ┌───────────────┐
-             └───────────────►│ Billing      │
-                              └───────────────┘
+```mermaid
+flowchart LR
+    Client["HTTP client"] --> Public["Public listener :8080"]
+
+    subgraph Gateway["API Gateway"]
+        Public --> MW["Request ID · Recovery · Timeout · CORS"]
+        MW --> Policy["Rate limit · JWT · Cache"]
+        Policy --> Router["Longest-prefix router"]
+        Router --> Proxy["Retry-aware reverse proxy"]
+        Proxy --> Balancer["Round Robin balancer"]
+        Balancer --> Health["Per-upstream circuit breaker"]
+        Admin["Admin listener :9090\nhealth · readiness · metrics · pprof"]
+    end
+
+    Health --> Users1["Users #1"]
+    Health --> Users2["Users #2"]
+    Health --> Users3["Users #3"]
+    Health --> Billing["Billing"]
+
+    Policy --> Redis[("Redis\nlimits + cache")]
+    Policy --> Identity["JWKS / identity provider"]
+
+    Gateway -. "metrics" .-> Prometheus["Prometheus → Grafana"]
+    Gateway -. "OTLP traces" .-> Collector["OTel Collector → Elastic APM"]
+    Gateway -. "JSON logs" .-> Elastic["Filebeat → Elasticsearch → Kibana"]
 ```
 
-Requests under `/api/` are distributed between the three Users instances.
-The more specific `/api/billing/` prefix is routed to Billing. Prefixes are
+The public listener handles proxied traffic only. Operational endpoints live
+on a separate admin listener, so health checks and diagnostics do not share the
+public routing surface.
+
+For every request, the gateway selects the most-specific configured prefix.
+`/api/billing/` therefore wins over `/api/`, and the configured prefix can be
 removed before forwarding:
 
 ```text
@@ -54,13 +71,16 @@ removed before forwarding:
 
 ## Quick start
 
-The complete demo can be started with one command:
+Requirements: Docker with Compose and enough resources for the selected stack.
+
+Start the gateway, Redis, three Users instances, Billing, and the demo identity
+provider:
 
 ```bash
 docker compose up --build
 ```
 
-Try the available endpoints:
+The public Billing route is immediately available:
 
 ```bash
 curl http://localhost:8080/api/billing/invoices
@@ -68,8 +88,7 @@ curl http://localhost:8080/api/billing/invoices/inv-1002
 curl -X POST http://localhost:8080/api/billing/payments
 ```
 
-The Users route is protected. In PowerShell, obtain a short-lived demo token
-and call it with:
+The Users route requires a token. In PowerShell:
 
 ```powershell
 $token = (Invoke-RestMethod -Method Post `
@@ -82,18 +101,92 @@ Invoke-RestMethod http://localhost:8080/api/users `
   -Headers @{ Authorization = "Bearer $token" }
 ```
 
-The identity service is deliberately demo-only: it has one client, keeps its
-ephemeral signing key in memory, supports only `client_credentials`, and does
-not implement users, refresh tokens, registration, or persistent key rotation.
+Repeated Users requests rotate between `backend-1`, `backend-2`, and
+`backend-3`. The included identity service is deliberately limited to local
+demonstration; an optional [Keycloak deployment](deployments/keycloak) shows the
+same gateway contract with a real OIDC provider.
 
-Repeat a Users request to see `backend-1`, `backend-2`, and `backend-3`
-rotate in the response.
+## Full observability demo
+
+The optional override adds Prometheus, a provisioned Grafana dashboard,
+Elasticsearch, Kibana, Filebeat, Elastic APM Server, and an OpenTelemetry
+Collector:
+
+```bash
+docker compose -f docker-compose.yml -f deployments/observability/docker-compose.yml up --build
+```
+
+| Interface | URL | Purpose |
+| --- | --- | --- |
+| Grafana | http://localhost:3000 | Provisioned `API Gateway Overview` dashboard (`admin` / `admin`) |
+| Prometheus | http://localhost:9091 | Metrics and target inspection |
+| Kibana | http://localhost:5601 | Structured logs and APM traces |
+| Gateway admin | http://localhost:9090 | Health, readiness, metrics, and `pprof` |
+
+The dashboard is loaded from version-controlled JSON and becomes the Grafana
+home page on startup. See the [observability guide](deployments/observability/README.md)
+for all endpoints, resource requirements, and local security limitations.
+
+## Request and failure semantics
+
+### Routing and balancing
+
+Routes are ordered by prefix specificity, not YAML order. Every route owns its
+balancer, so upstream rotation and health state do not leak between services.
+The balancer is behind a small consumer-defined interface; additional
+algorithms can be introduced without coupling routing to a concrete strategy.
+
+### Safe retries
+
+`max_attempts` includes the initial request and is capped at 10. Automatic
+retries are allowed only for `GET`, `HEAD`, and `OPTIONS`, and only when the
+body is absent or replayable through `GetBody`. Unsafe methods such as `POST`,
+`PUT`, `PATCH`, and `DELETE` are sent once. Each retry observes both the request
+context and a per-attempt timeout.
+
+This avoids duplicating side effects merely because an upstream connection
+failed after a request may have been processed.
+
+### Passive health and circuit breaking
+
+Each upstream instance owns an independent circuit breaker. Configured 5xx
+responses and transport failures count against that instance; client
+cancellation does not. Open instances are skipped until their timeout permits a
+probe. If every instance is unavailable, the gateway returns `503 Service
+Unavailable` instead of selecting a known-unhealthy destination.
+
+### External state and degradation policy
+
+Rate-limit counters and cached responses live in Redis, keeping behaviour
+consistent across gateway replicas. Atomic Token Bucket updates are performed
+server-side. Storage contracts are internal and replaceable by another
+Redis-compatible implementation without exposing a public SDK.
+
+Redis failures are explicitly configurable. The Docker demo uses fail-open for
+rate limiting and caching so a storage outage does not become a total gateway
+outage. Authentication remains fail-closed: a missing, invalid, expired, or
+insufficiently scoped token never reaches a protected upstream.
+
+### Cache isolation
+
+Caching is opt-in per route. Only public `GET` and `HEAD` requests qualify.
+Requests carrying `Authorization`, and responses containing `Set-Cookie`,
+`Cache-Control: private`, or `Cache-Control: no-store`, bypass storage. Bodies
+and storage operations have explicit size and time limits.
+
+### Lifecycle
+
+Configuration is parsed and validated before listeners start. Unknown YAML
+fields, multiple documents, invalid durations or URLs, duplicate route prefixes,
+and duplicate upstreams fail startup. Readiness becomes successful only after
+both listeners are open, changes to unavailable before shutdown, and then both
+servers drain within the configured deadline.
 
 ## Configuration
 
-The default local configuration is in
-[`configs/gateway.yaml`](configs/gateway.yaml). Docker uses
-[`configs/gateway.docker.yaml`](configs/gateway.docker.yaml).
+Local defaults are in [`configs/gateway.yaml`](configs/gateway.yaml); Docker
+uses [`configs/gateway.docker.yaml`](configs/gateway.docker.yaml). A shortened
+example:
 
 ```yaml
 retry:
@@ -109,8 +202,7 @@ circuit_breaker:
 
 routes:
   - path_prefix: /api/billing/
-    upstreams:
-      - http://localhost:8091
+    upstreams: [http://localhost:8091]
     strip_prefix: true
 
   - path_prefix: /api/
@@ -121,313 +213,133 @@ routes:
     strip_prefix: true
 ```
 
-Unknown YAML fields, duplicate upstreams, unsupported URL schemes, invalid
-durations, duplicate route prefixes, and multiple YAML documents are rejected
-during startup.
+Selected process and tracing settings can be overridden through
+`GATEWAY_*` environment variables. The complete schema and runnable values are
+best understood from the two checked-in configuration files; strict loading
+ensures they remain executable documentation.
 
-`max_attempts` counts the initial request and is limited to 10. Retries apply
-only to `GET`, `HEAD`, and `OPTIONS`, and only when a request body is absent or
-can be replayed through `GetBody`. Unsafe methods such as `POST`, `PUT`,
-`PATCH`, and `DELETE` are sent once. Each attempt selects the next upstream;
-network errors and configured 5xx statuses are retryable within the request
-context and per-attempt timeout.
+## Operational surface
 
-Each upstream instance owns an independent circuit breaker. Configured failure
-statuses and transport failures are recorded per proxy attempt; open upstreams
-are skipped. If no upstream is available, the gateway returns `503 Service
-Unavailable`. Client cancellation is neutral and does not penalize upstream
-health.
+The admin server listens on `:9090` by default:
 
-Rate limiting uses an atomic Redis script and is enabled in the Docker demo.
-Global rules protect gateway capacity; route rules protect individual services.
-Built-in keys are `global` and `client_ip`, and filters are `all` and
-`writes_only`. Exceeding a rule returns `429` with `Retry-After`. The gateway
-talks through the Redis protocol, so the backend may be Redis itself or another
-Redis-compatible server.
+| Endpoint | Meaning |
+| --- | --- |
+| `GET /healthz` | Process liveness |
+| `GET /readyz` | Traffic readiness; `503` before startup and during shutdown |
+| `GET /metrics` | Prometheus metrics |
+| `GET /debug/pprof/` | Go runtime profiling |
 
-JWT authentication is opt-in per route. The gateway validates an explicit
-`RS256` algorithm allowlist, JWKS key ID, signature, issuer, audience,
-expiration, not-before, and required scopes. Tokens are issued by an external
-identity provider; the gateway never issues or logs them. Verified subjects are
-forwarded in `X-Authenticated-Subject` after any client-supplied value is
-removed.
+Metrics cover request rate, status, latency, response size, in-flight requests,
+routes, upstream attempts, retries, auth, cache and rate-limit decisions, plus
+Go runtime and process state. Labels are bounded: raw paths, request IDs,
+subjects, and tokens are never used as metric labels. Logs and traces share
+`trace_id` and `span_id` for correlation.
 
-### Keycloak provider demo
+## Why build this instead of configuring an existing proxy?
 
-An optional Keycloak setup demonstrates the same gateway contract against a
-real OIDC provider. Start it from the repository root:
+This repository is not presented as a drop-in replacement for mature,
+security-hardened proxies. It is an application-level gateway for studying and
+demonstrating the engineering trade-offs that those products encapsulate.
 
-```powershell
-docker compose -f docker-compose.yml -f deployments/keycloak/docker-compose.yml up --build
-```
+| | This project | Nginx | Envoy | Traefik |
+| --- | --- | --- | --- | --- |
+| Primary fit | Inspectable Go gateway and tailored application policies | Proven web server, reverse proxy, buffering, caching, and static edge configuration | High-performance L4/L7 data plane, service mesh, rich resilience, and xDS control planes | Cloud-native ingress and edge routing driven by infrastructure providers |
+| Configuration model | Strict static YAML plus selected environment overrides | Declarative server/location/upstream configuration | Static bootstrap or dynamic xDS APIs | Static install configuration plus dynamic provider-discovered routing |
+| Discovery and live updates | Static upstream list; reload is not implemented yet | DNS and configuration reload patterns; advanced capabilities vary by edition | Extensive LDS/RDS/CDS/EDS/SDS discovery through xDS | Native Docker, Kubernetes, Consul, file, and other providers |
+| Resilience in scope | Safe retries and passive per-instance circuit breakers | Mature upstream retry/failover primitives | Broad circuit breaking, outlier detection, health checking, retry budgets, and load balancing | Middleware/service-oriented retry, health, and balancing features |
+| Extensibility | Direct Go packages and small internal interfaces | Modules and njs | HTTP/network filters, Wasm, dynamic modules, and control-plane APIs | Middleware, plugins, and provider ecosystem |
+| Best reason to choose it | You need to understand or own the policy code end to end | You need a mature, efficient general-purpose reverse proxy or web edge | You need service-mesh-grade protocols, discovery, and control-plane integration | You want low-friction routing that follows orchestrator state |
 
-Request a service-account token and call the protected route:
+Choose [Nginx](https://nginx.org/en/docs/http/ngx_http_proxy_module.html) for a
+widely deployed general-purpose web edge and mature proxy/cache controls.
+Choose [Envoy](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/arch_overview)
+when dynamic [xDS configuration](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/operations/dynamic_configuration),
+multiple protocols, or service-mesh-grade traffic management are requirements.
+Choose [Traefik](https://doc.traefik.io/traefik/reference/install-configuration/providers/overview/)
+when routes should follow Docker, Kubernetes, or other provider state with
+minimal control-plane work. Choose this project when explicit Go code,
+controlled scope, and explainable policy behaviour are the point.
 
-```powershell
-$token = (Invoke-RestMethod -Method Post `
-  -Uri http://localhost:8085/realms/gateway-demo/protocol/openid-connect/token `
-  -Body @{ client_id = 'gateway-demo'; client_secret = 'gateway-demo-secret'; grant_type = 'client_credentials' }).access_token
+## Quality gates
 
-Invoke-RestMethod http://localhost:8080/api/users `
-  -Headers @{ Authorization = "Bearer $token" }
-```
+GitHub Actions runs independent build, unit, and integration jobs:
 
-Keycloak runs in development mode and imports
-`deployments/keycloak/gateway-demo-realm.json`; its credentials are strictly
-for local demonstration. The lightweight identity service remains available on
-port `8084`, but the gateway uses Keycloak while the override is active.
+| Job | Checks |
+| --- | --- |
+| `build` | Builds Gateway, Users, Billing, and Identity binaries |
+| `unit-tests` | `go vet`, race-enabled tests, and per-package coverage |
+| `integration-tests` | Real-network scenarios with Redis and the race detector |
 
-Response caching is also opt-in per route and uses Redis with bounded operation
-timeouts and response sizes. Only public `GET` and `HEAD` requests are eligible.
-Requests containing `Authorization`, and responses containing `Set-Cookie`,
-`Cache-Control: private`, or `Cache-Control: no-store`, bypass storage. Cache
-failures allow upstream traffic by default. The Docker Billing route
-demonstrates a 30-second TTL and returns `X-Cache: MISS` or `X-Cache: HIT`.
+Every `internal` package must retain statement coverage strictly above 75%.
+Integration tests use real TCP listeners and cover balancing, route precedence,
+prefix stripping, Request IDs, lifecycle endpoints, and graceful shutdown.
 
-### Distributed tracing
-
-Tracing is optional and disabled by default. When enabled, the gateway creates
-an HTTP server span, a span for every proxy attempt, and an HTTP client span for
-upstream and JWKS requests. The outgoing `traceparent` header lets an
-instrumented backend continue the same trace. Structured request logs include
-`trace_id` and `span_id`; Prometheus metrics and `pprof` remain independent.
-
-The gateway exports OTLP/HTTP to an OpenTelemetry Collector rather than
-directly to a vendor backend. The optional complete observability stack routes
-traces through the Collector to Elastic APM, JSON container logs through
-Filebeat to Elasticsearch/Kibana, and metrics through Prometheus to Grafana.
-Start it with:
-
-```powershell
-docker compose -f docker-compose.yml -f deployments/observability/docker-compose.yml up --build
-```
-
-Open Grafana at `http://localhost:3000` (`admin` / `admin`) for the provisioned
-API Gateway dashboard, Prometheus at `http://localhost:9091`, and Kibana at
-`http://localhost:5601` for logs and APM traces. See the
-[observability guide](deployments/observability/README.md) for endpoints,
-resource requirements, and security limitations.
-
-```yaml
-telemetry:
-  tracing:
-    enabled: false
-    service_name: api-gateway
-    endpoint: localhost:4318
-    insecure: true
-    sample_ratio: 1
-    shutdown_timeout: 5s
-```
-
-Environment variables override selected configuration values:
-
-```text
-GATEWAY_SERVER_ADDRESS
-GATEWAY_ADMIN_ADDRESS
-GATEWAY_LOG_LEVEL
-GATEWAY_LOG_FORMAT
-GATEWAY_SERVER_READ_TIMEOUT
-GATEWAY_SERVER_WRITE_TIMEOUT
-GATEWAY_SERVER_IDLE_TIMEOUT
-GATEWAY_SERVER_SHUTDOWN_TIMEOUT
-GATEWAY_MIDDLEWARE_REQUEST_TIMEOUT
-GATEWAY_TELEMETRY_TRACING_ENABLED
-GATEWAY_TELEMETRY_TRACING_SERVICE_NAME
-GATEWAY_TELEMETRY_TRACING_ENDPOINT
-GATEWAY_TELEMETRY_TRACING_INSECURE
-GATEWAY_TELEMETRY_TRACING_SAMPLE_RATIO
-GATEWAY_TELEMETRY_TRACING_SHUTDOWN_TIMEOUT
-```
-
-For example:
-
-```bash
-GATEWAY_LOG_LEVEL=debug go run ./cmd/gateway -config configs/gateway.yaml
-```
-
-## Operational endpoints
-
-The administrative server listens on `:9090` by default:
-
-| Endpoint            | Purpose                                                     |
-| ------------------- | ----------------------------------------------------------- |
-| `GET /healthz`      | Process liveness                                            |
-| `GET /readyz`       | Readiness; returns `503` before startup and during shutdown |
-| `GET /metrics`      | Prometheus-compatible gateway metrics                       |
-| `GET /debug/pprof/` | Go runtime profiler                                         |
-
-Metrics use only bounded labels from HTTP methods/statuses and configured
-routes, upstreams, and rule names. Raw paths, request IDs, users, and tokens are
-never metric labels. Histograms support p50/p95/p99 latency dashboards without
-calculating quantiles inside the gateway.
-
-The gateway reports ready only after both public and admin listeners have been
-opened successfully. It becomes unready before graceful shutdown begins.
-
-## Development
-
-Requirements:
-
-- Go version declared in [`go.mod`](go.mod)
-- Docker and Docker Compose for the complete demo
-- `make` for the convenience commands below
-
-```bash
-make build
-make run
-make lint
-make test
-make test-integration
-make tidy
-```
-
-Direct equivalents:
-
-```bash
-go build ./cmd/gateway
-go vet ./...
-go test ./...
-go test -race -count=1 ./test/integration/...
-```
-
-## Testing
-
-Unit tests cover every `internal` package. CI enforces coverage strictly greater
-than 75% for each package individually, so high coverage in one package cannot
-hide missing tests in another.
-
-Integration tests live in [`test/integration`](test/integration) and run the
-gateway in-process with real TCP listeners. They verify:
-
-- Round Robin ordering
-- routing between Users and Billing
-- most-specific prefix selection
-- prefix stripping
-- generated and preserved Request IDs
-- health and readiness endpoints
-- unknown-route handling
-- graceful shutdown
-
-Shared test infrastructure is isolated in
-[`test/integration/internal/testenv`](test/integration/internal/testenv).
-It provides configurable upstream groups, dynamic ports, readiness polling,
-an HTTP client, automatic cleanup, and scenario-focused response assertions.
-See the integration [testing guide](test/integration/README.md) when adding a
-new scenario.
-
-## Load testing
-
-Ready-to-run `hey` and `wrk` commands are documented in
-[`test/load/README.md`](test/load/README.md). A mixed Users/Billing workload is
-provided in [`test/load/mixed.lua`](test/load/mixed.lua).
-
-Example:
-
-```bash
-wrk -t4 -c100 -d60s --latency -s test/load/mixed.lua \
-  http://localhost:8080
-```
-
-Load tests are intentionally excluded from regular CI because shared runners
-do not provide stable performance measurements.
-
-## Continuous integration
-
-GitHub Actions runs three independent jobs in parallel:
-
-| Job                 | Checks                                                                 |
-| ------------------- | ---------------------------------------------------------------------- |
-| `build`             | Builds Gateway, Users, Billing, and demo Identity binaries             |
-| `unit-tests`        | Runs `go vet`, race-enabled unit tests, and per-package coverage gates |
-| `integration-tests` | Runs the real-network integration suite with the race detector         |
-
-## AI agent harness
-
-Repository-level instructions for coding agents are defined in
-[`AGENTS.md`](AGENTS.md). More specific rules apply under
-[`internal`](internal/AGENTS.md) and
-[`test/integration`](test/integration/AGENTS.md).
-
-Agents and contributors can reproduce the main local quality gate with:
+Run the same repository gate locally:
 
 ```powershell
 .\scripts\verify.ps1
 ```
 
-or:
-
 ```bash
 sh scripts/verify.sh
 ```
 
-Race detection is optional locally because it requires a working C toolchain:
+Load scenarios for `hey` and `wrk`, including reproducible result files, live
+under [`test/load`](test/load/README.md). Performance thresholds are kept out of
+shared CI because runner capacity is not stable.
 
-```powershell
-.\scripts\verify.ps1 -Race
-```
-
-```bash
-RACE=1 sh scripts/verify.sh
-```
-
-Run the project-specific, read-only review skill before opening a PR:
+## Repository layout
 
 ```text
-Use $review-api-gateway to review my current changes.
+cmd/gateway/                  process startup and dependency wiring
+configs/                      strict local and Docker configuration
+deployments/                  demo services and optional local stacks
+examples/                     Users, Billing, and Identity services
+internal/auth/                JWT and JWKS verification
+internal/balancer/            balancing contract and Round Robin
+internal/cache/               response-cache contracts
+internal/cachestore/redis/    Redis cache persistence
+internal/circuitbreaker/      HTTP-independent circuit state machine
+internal/config/              loading, defaults, overrides, validation
+internal/limiter/             Token Bucket policy wiring
+internal/logger/              structured logging
+internal/metrics/             Prometheus instrumentation
+internal/middleware/          HTTP cross-cutting behaviour
+internal/proxy/               route-aware reverse proxy
+internal/ratelimit/           rate-limit contracts and registry
+internal/ratestore/redis/     atomic Redis rate-limit persistence
+internal/server/              listeners, readiness, and shutdown
+internal/telemetry/           OpenTelemetry setup and propagation
+internal/upstream/            upstream identity and health state
+test/integration/             real-network scenarios and shared harness
+test/load/                    manual performance baselines
+scripts/                      cross-platform verification harness
 ```
 
-The skill reads all applicable `AGENTS.md` files, reviews architecture and Go
-semantics, runs relevant non-mutating checks, and reports prioritized findings.
-It is stored in [`.codex/skills/review-api-gateway`](.codex/skills/review-api-gateway).
+Package-level architectural contracts are documented in the repository's
+`AGENTS.md` hierarchy. Project-specific implementation and review skills live
+under [`.codex/skills`](.codex/skills) so AI-assisted changes follow the same
+boundaries and validation rules as human contributions.
 
-For new features, start with the implementation workflow:
+## Current boundaries and roadmap
 
-```text
-Use $implement-api-gateway-feature to plan and implement <feature>.
-```
+The current release is an HTTP/1.1 application gateway with static YAML
+configuration and passive health tracking. The next meaningful extensions are:
 
-It supports plan-only and implementation requests, establishes package and
-configuration boundaries, adds the appropriate tests and documentation, and
-runs the repository validation gate. Follow it with `$review-api-gateway` before
-commit or PR. The skill is stored in
-[`.codex/skills/implement-api-gateway-feature`](.codex/skills/implement-api-gateway-feature).
+- active upstream health checks;
+- transactional configuration reload;
+- gRPC proxying;
+- service discovery;
+- additional balancing strategies and controlled traffic shifting.
 
-## Project layout
+TLS termination, a WAF, a management control plane, multi-region coordination,
+and automatic certificate management are intentionally outside the current
+scope. For those requirements, deploy behind a mature edge proxy or select one
+of the established products above.
 
-```text
-.
-├── cmd/gateway/                    gateway entry point
-├── configs/                        local and Docker YAML configuration
-├── deployments/                    backend container definitions
-├── examples/
-│   ├── backend/                    demo Users service
-│   ├── billing/                    demo Billing service
-│   └── identity/                   demo token issuer and JWKS endpoint
-├── internal/
-│   ├── balancer/                   balancer contract and Round Robin
-│   ├── auth/                       JWT and JWKS verification
-│   ├── cache/                      response-cache contract
-│   ├── cachestore/redis/           Redis response-cache persistence
-│   ├── circuitbreaker/              circuit breaker state machine
-│   ├── config/                     loading and strict validation
-│   ├── logger/                     structured logger construction
-│   ├── metrics/                    Prometheus-compatible metrics
-│   ├── middleware/                 HTTP middleware chain
-│   ├── proxy/                      route-aware reverse proxies
-│   ├── server/                     listeners, readiness, and lifecycle
-│   ├── telemetry/                  OpenTelemetry tracing and propagation
-│   └── upstream/                   upstream instance and health state
-├── test/
-│   ├── integration/
-│   │   └── internal/testenv/       shared integration harness
-│   └── load/                       hey and wrk scenarios
-├── scripts/                         cross-platform verification harness
-├── AGENTS.md                        repository instructions for AI agents
-├── Dockerfile
-├── docker-compose.yml
-└── Makefile
-```
+## Local-demo security
 
-## Roadmap
-
-- gRPC proxying and service discovery
+Demo client secrets, the Grafana password, disabled Elastic security, and the
+Filebeat Docker socket mount are for local development only. Do not expose the
+Compose stack to an untrusted network or reuse its credentials in another
+environment.
