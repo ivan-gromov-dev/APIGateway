@@ -193,14 +193,20 @@ instrumented backend continue the same trace. Structured request logs include
 `trace_id` and `span_id`; Prometheus metrics and `pprof` remain independent.
 
 The gateway exports OTLP/HTTP to an OpenTelemetry Collector rather than
-directly to a vendor backend. Start the demo Collector and Tempo backend with:
+directly to a vendor backend. The optional complete observability stack routes
+traces through the Collector to Elastic APM, JSON container logs through
+Filebeat to Elasticsearch/Kibana, and metrics through Prometheus to Grafana.
+Start it with:
 
 ```powershell
 docker compose -f docker-compose.yml -f deployments/observability/docker-compose.yml up --build
 ```
 
-Tempo's API is exposed at `http://localhost:3200`. A visualization layer such
-as Grafana can be connected later without changing gateway instrumentation.
+Open Grafana at `http://localhost:3000` (`admin` / `admin`) for the provisioned
+API Gateway dashboard, Prometheus at `http://localhost:9091`, and Kibana at
+`http://localhost:5601` for logs and APM traces. See the
+[observability guide](deployments/observability/README.md) for endpoints,
+resource requirements, and security limitations.
 
 ```yaml
 telemetry:
