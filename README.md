@@ -332,6 +332,18 @@ The skill reads all applicable `AGENTS.md` files, reviews architecture and Go
 semantics, runs relevant non-mutating checks, and reports prioritized findings.
 It is stored in [`.codex/skills/review-api-gateway`](.codex/skills/review-api-gateway).
 
+For new features, start with the implementation workflow:
+
+```text
+Use $implement-api-gateway-feature to plan and implement <feature>.
+```
+
+It supports plan-only and implementation requests, establishes package and
+configuration boundaries, adds the appropriate tests and documentation, and
+runs the repository validation gate. Follow it with `$review-api-gateway` before
+commit or PR. The skill is stored in
+[`.codex/skills/implement-api-gateway-feature`](.codex/skills/implement-api-gateway-feature).
+
 ## Project layout
 
 ```text

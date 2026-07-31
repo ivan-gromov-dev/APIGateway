@@ -118,6 +118,17 @@ Use $review-api-gateway to review my current changes.
 
 The review skill reports findings but does not modify, stage, or commit files.
 
+For a repository-aligned plan or implementation of a new capability, invoke:
+
+```text
+Use $implement-api-gateway-feature to plan and implement <feature>.
+```
+
+The implementation skill respects plan-only requests, loads the complete
+instruction hierarchy, and carries authorized changes through configuration,
+runtime wiring, tests, documentation, and validation. Use the review skill as a
+separate final check.
+
 ## Definition of done
 
 A change is complete when:
