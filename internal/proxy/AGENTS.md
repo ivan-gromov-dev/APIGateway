@@ -21,6 +21,8 @@ creation, forwarding headers, prefix stripping, and proxy error responses.
 - `SetXForwarded` writes standardized forwarding information.
 - Proxy transport errors are logged and returned as HTTP 502. Exhaustion of
   available upstreams returns HTTP 503.
+- Optional metrics record configured routes/upstreams, attempts, outcomes,
+  latency, and retry reasons without using incoming paths as labels.
 
 Configuration validation normally guarantees valid URLs and non-empty upstream
 lists. Constructors still return contextual errors for direct callers.

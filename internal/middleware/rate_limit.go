@@ -11,6 +11,7 @@ import (
 
 	"github.com/Djunichi/APIGateway/internal/config"
 	"github.com/Djunichi/APIGateway/internal/limiter"
+	"github.com/Djunichi/APIGateway/internal/metrics"
 	"github.com/Djunichi/APIGateway/internal/ratelimit"
 )
 
@@ -22,6 +23,10 @@ type rateRule struct {
 }
 
 func BuildRateLimit(rules []config.RateLimitRule, cfg config.RateLimit, registry *ratelimit.Registry) (Middleware, error) {
+	return BuildRateLimitWithMetrics(rules, cfg, registry, nil, "global")
+}
+
+func BuildRateLimitWithMetrics(rules []config.RateLimitRule, cfg config.RateLimit, registry *ratelimit.Registry, collector *metrics.Collector, scope string) (Middleware, error) {
 	if len(rules) == 0 {
 		return func(next http.Handler) http.Handler { return next }, nil
 	}
@@ -56,6 +61,7 @@ func BuildRateLimit(rules []config.RateLimitRule, cfg config.RateLimit, registry
 				}
 				key, err := rule.key(r)
 				if err != nil {
+					observeFeature(collector, "rate_limit", scope, rule.name, "key_error")
 					writeRateError(w, http.StatusServiceUnavailable, "rate limiter unavailable")
 					return
 				}
@@ -64,12 +70,15 @@ func BuildRateLimit(rules []config.RateLimitRule, cfg config.RateLimit, registry
 				cancel()
 				if err != nil {
 					if cfg.OnBackendError == "allow" {
+						observeFeature(collector, "rate_limit", scope, rule.name, "backend_error_allowed")
 						continue
 					}
+					observeFeature(collector, "rate_limit", scope, rule.name, "backend_error_denied")
 					writeRateError(w, http.StatusServiceUnavailable, "rate limiter unavailable")
 					return
 				}
 				if !result.Allowed {
+					observeFeature(collector, "rate_limit", scope, rule.name, "limited")
 					seconds := int(math.Ceil(result.RetryAfter.Seconds()))
 					if seconds < 1 {
 						seconds = 1
@@ -78,10 +87,17 @@ func BuildRateLimit(rules []config.RateLimitRule, cfg config.RateLimit, registry
 					writeRateError(w, http.StatusTooManyRequests, "rate limit exceeded")
 					return
 				}
+				observeFeature(collector, "rate_limit", scope, rule.name, "allowed")
 			}
 			next.ServeHTTP(w, r)
 		})
 	}, nil
+}
+
+func observeFeature(collector *metrics.Collector, feature, scope, name, result string) {
+	if collector != nil {
+		collector.ObserveFeature(feature, scope, name, result)
+	}
 }
 
 func writeRateError(w http.ResponseWriter, status int, message string) {

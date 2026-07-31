@@ -17,6 +17,7 @@ business logic.
 - `CORS` handles allowed origins and OPTIONS preflight responses.
 - `Authentication` verifies Bearer tokens and installs a trusted principal.
 - `ResponseCache` caches bounded, public GET/HEAD responses through a Store.
+- Metrics-aware variants report bounded auth, cache, rate-limit, and route decisions.
 
 The order configured in `server.Run` is observable. The first declared
 middleware is the outermost wrapper.

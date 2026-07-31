@@ -1,6 +1,7 @@
 package testenv
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -12,6 +13,17 @@ type upstreamPayload struct {
 	Path        string `json:"path"`
 	RequestID   string `json:"request_id"`
 	Traceparent string `json:"traceparent"`
+}
+
+// RequireBodyContains fails unless the response body contains every fragment.
+func (r *Response) RequireBodyContains(fragments ...string) *Response {
+	r.t.Helper()
+	for _, fragment := range fragments {
+		if !bytes.Contains(r.Body, []byte(fragment)) {
+			r.t.Fatalf("response body does not contain %q", fragment)
+		}
+	}
+	return r
 }
 
 // RequireTraceID fails unless the upstream received the expected W3C trace ID.

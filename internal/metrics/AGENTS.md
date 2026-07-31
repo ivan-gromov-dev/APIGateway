@@ -7,9 +7,11 @@ Prometheus text format through `http.Handler`.
 
 ## Current metrics
 
-- `gateway_http_requests_total`: all observed public requests.
-- `gateway_http_errors_total`: responses with status 500 or greater.
-- `gateway_http_request_duration_seconds_sum`: cumulative request duration.
+- HTTP request count, latency histogram, response-size histogram, and in-flight gauge;
+- route/status request counts;
+- proxy attempts, attempt latency, retries, upstream outcomes, and exhaustion;
+- bounded auth, cache, and rate-limit decisions;
+- standard Go runtime and process collectors.
 
 `Collector.Observe` is called by logging middleware. `Collector.ServeHTTP` is
 mounted only on the admin server at `/metrics`.
@@ -24,9 +26,8 @@ mounted only on the admin server at `/metrics`.
 - Avoid high-cardinality labels such as raw URL, Request ID, user ID, or full
   upstream address.
 
-The current collector is intentionally minimal. Before adding histograms,
-labels, registries, or OpenTelemetry, decide whether to adopt the official
-Prometheus client rather than extending the handwritten exposition indefinitely.
+The collector owns a private official Prometheus registry. Do not use the
+process-global default registry or register application metrics outside this package.
 
 ## Adding metrics
 

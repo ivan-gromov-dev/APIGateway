@@ -12,14 +12,20 @@ import (
 
 	"github.com/Djunichi/APIGateway/internal/cache"
 	"github.com/Djunichi/APIGateway/internal/config"
+	"github.com/Djunichi/APIGateway/internal/metrics"
 )
 
 func ResponseCache(store cache.Store, global config.Cache, route config.RouteCache, routePrefix string) Middleware {
+	return ResponseCacheWithMetrics(store, global, route, routePrefix, nil)
+}
+
+func ResponseCacheWithMetrics(store cache.Store, global config.Cache, route config.RouteCache, routePrefix string, collector *metrics.Collector) Middleware {
 	vary := append([]string(nil), route.VaryHeaders...)
 	var flights [64]sync.Mutex
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !cacheableRequest(r) {
+				observeFeature(collector, "cache", routePrefix, "", "bypass")
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -27,11 +33,16 @@ func ResponseCache(store cache.Store, global config.Cache, route config.RouteCac
 			ctx, cancel := context.WithTimeout(r.Context(), global.OperationTimeout)
 			entry, found, err := store.Get(ctx, key)
 			cancel()
+			if err != nil && global.OnBackendError == "allow" {
+				observeFeature(collector, "cache", routePrefix, "", "backend_error_allowed")
+			}
 			if err != nil && global.OnBackendError == "deny" {
+				observeFeature(collector, "cache", routePrefix, "", "backend_error_denied")
 				writeCacheError(w)
 				return
 			}
 			if found {
+				observeFeature(collector, "cache", routePrefix, "", "hit")
 				writeCacheHit(w, r, entry)
 				return
 			}
@@ -41,16 +52,22 @@ func ResponseCache(store cache.Store, global config.Cache, route config.RouteCac
 			ctx, cancel = context.WithTimeout(r.Context(), global.OperationTimeout)
 			entry, found, err = store.Get(ctx, key)
 			cancel()
+			if err != nil && global.OnBackendError == "allow" {
+				observeFeature(collector, "cache", routePrefix, "", "backend_error_allowed")
+			}
 			if err != nil && global.OnBackendError == "deny" {
+				observeFeature(collector, "cache", routePrefix, "", "backend_error_denied")
 				writeCacheError(w)
 				return
 			}
 			if found {
+				observeFeature(collector, "cache", routePrefix, "", "hit_after_wait")
 				writeCacheHit(w, r, entry)
 				return
 			}
 			recorder := &cacheWriter{ResponseWriter: w, status: http.StatusOK, limit: global.MaxBodyBytes}
 			w.Header().Set("X-Cache", "MISS")
+			observeFeature(collector, "cache", routePrefix, "", "miss")
 			next.ServeHTTP(recorder, r)
 			if !recorder.overflow && cacheableResponse(recorder.status, w.Header(), vary) {
 				entry := cache.Entry{Status: recorder.status, Header: cacheHeaders(w.Header()), Body: append([]byte(nil), recorder.body.Bytes()...)}
@@ -58,8 +75,12 @@ func ResponseCache(store cache.Store, global config.Cache, route config.RouteCac
 				err := store.Set(ctx, key, entry, route.TTL)
 				cancel()
 				if err != nil && global.OnBackendError == "deny" {
+					observeFeature(collector, "cache", routePrefix, "", "store_error")
 					// The upstream response is already committed; failures are observable only on later requests.
 					return
+				}
+				if err == nil {
+					observeFeature(collector, "cache", routePrefix, "", "stored")
 				}
 			}
 		})

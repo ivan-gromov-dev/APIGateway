@@ -14,7 +14,8 @@ operational endpoints, graceful shutdown, and real-network integration testing.
 - Graceful shutdown with readiness state transitions
 - Structured logging with `log/slog`
 - Request ID propagation, panic recovery, request logging, timeout, and CORS
-- Prometheus-compatible metrics and Go `pprof`
+- Prometheus metrics for HTTP RED signals, routes, upstream attempts, retries,
+  authentication, caching, rate limiting, Go runtime and process state; plus `pprof`
 - OpenTelemetry traces with W3C context propagation and OTLP export
 - Unit tests, real-network integration tests, and load-test scenarios
 - Retries across upstreams for safe, replayable requests
@@ -248,6 +249,11 @@ The administrative server listens on `:9090` by default:
 | `GET /readyz`       | Readiness; returns `503` before startup and during shutdown |
 | `GET /metrics`      | Prometheus-compatible gateway metrics                       |
 | `GET /debug/pprof/` | Go runtime profiler                                         |
+
+Metrics use only bounded labels from HTTP methods/statuses and configured
+routes, upstreams, and rule names. Raw paths, request IDs, users, and tokens are
+never metric labels. Histograms support p50/p95/p99 latency dashboards without
+calculating quantiles inside the gateway.
 
 The gateway reports ready only after both public and admin listeners have been
 opened successfully. It becomes unready before graceful shutdown begins.
