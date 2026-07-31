@@ -12,6 +12,7 @@ import (
 
 	"github.com/Djunichi/APIGateway/internal/config"
 	"github.com/Djunichi/APIGateway/internal/metrics"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func TestChainAppliesMiddlewareInDeclarationOrder(t *testing.T) {
@@ -111,6 +112,23 @@ func TestLoggingRecordsResponseAndMetrics(t *testing.T) {
 	collector.ServeHTTP(metricsResponse, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if !strings.Contains(metricsResponse.Body.String(), "gateway_http_requests_total 1") {
 		t.Fatalf("request metric was not recorded: %q", metricsResponse.Body.String())
+	}
+}
+
+func TestLoggingCorrelatesTrace(t *testing.T) {
+	var logs bytes.Buffer
+	handler := Logging(slog.New(slog.NewJSONHandler(&logs, nil)), &metrics.Collector{})(
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+	)
+	spanContext := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2}, TraceFlags: trace.FlagsSampled,
+	})
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request = request.WithContext(trace.ContextWithSpanContext(request.Context(), spanContext))
+	handler.ServeHTTP(httptest.NewRecorder(), request)
+	if output := logs.String(); !strings.Contains(output, `"trace_id":"01000000000000000000000000000000"`) ||
+		!strings.Contains(output, `"span_id":"0200000000000000"`) {
+		t.Fatalf("trace correlation missing: %s", output)
 	}
 }
 

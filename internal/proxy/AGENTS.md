@@ -16,6 +16,8 @@ creation, forwarding headers, prefix stripping, and proxy error responses.
 - `http.ServeMux` chooses the most specific registered prefix.
 - The retry transport selects a health-eligible target for every attempt and
   joins its base URL with the incoming request path.
+- When tracing is supplied, every proxy attempt owns an internal span and the
+  instrumented base transport creates the child HTTP client span.
 - `SetXForwarded` writes standardized forwarding information.
 - Proxy transport errors are logged and returned as HTTP 502. Exhaustion of
   available upstreams returns HTTP 503.
@@ -28,6 +30,8 @@ lists. Constructors still return contextual errors for direct callers.
 - Never share a stateful balancer between routes.
 - Balancer selection occurs once per proxy attempt.
 - Preserve request context, method, query string, body semantics, and Request ID.
+- Preserve W3C trace context across retries and end attempt spans when their
+  response bodies complete or close.
 - Prefix stripping happens outside the reverse proxy and must not produce an
   unexpected empty path.
 - Do not leak internal errors or upstream topology in client responses.

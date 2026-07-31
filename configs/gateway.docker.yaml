@@ -11,6 +11,14 @@ admin:
 log:
   level: info
   format: json
+telemetry:
+  tracing:
+    enabled: false
+    service_name: api-gateway
+    endpoint: otel-collector:4318
+    insecure: true
+    sample_ratio: 1
+    shutdown_timeout: 5s
 middleware:
   request_timeout: 15s
   cors:

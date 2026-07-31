@@ -34,6 +34,7 @@ type Config struct {
 	JWKSURL, Issuer, Audience string
 	Algorithms                []string
 	ClockSkew, HTTPTimeout    time.Duration
+	HTTPClient                *http.Client
 }
 
 type Verifier struct {
@@ -46,7 +47,11 @@ type Verifier struct {
 }
 
 func New(ctx context.Context, cfg Config) (*Verifier, error) {
-	v := &Verifier{cfg: cfg, client: &http.Client{Timeout: cfg.HTTPTimeout}}
+	client := cfg.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: cfg.HTTPTimeout}
+	}
+	v := &Verifier{cfg: cfg, client: client}
 	if err := v.refresh(ctx); err != nil {
 		return nil, fmt.Errorf("load JWKS: %w", err)
 	}

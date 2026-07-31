@@ -9,9 +9,9 @@ and administrative HTTP servers.
 
 `Server.Run` currently:
 
-1. creates metrics and prepares Redis-backed optional features;
-2. prepares configured JWT verifiers and the route-aware proxy;
-3. builds the middleware chain;
+1. prepares the optional tracing runtime and creates metrics;
+2. prepares Redis-backed features, JWT verifiers, and the route-aware proxy;
+3. builds the middleware chain and wraps the public handler with tracing;
 4. constructs public and admin `http.Server` values;
 5. opens the public listener;
 6. opens the admin listener;
@@ -20,7 +20,7 @@ and administrative HTTP servers.
 9. waits for context cancellation or a server failure;
 10. marks readiness false;
 11. gracefully shuts both servers down in parallel;
-12. joins runtime and shutdown errors.
+12. flushes an owned tracing provider and joins runtime and shutdown errors.
 
 Do not mark ready before every required listener is open. If admin listener
 creation fails, close the already-open public listener.
@@ -47,6 +47,8 @@ requirement changes this boundary.
 - Public and admin shutdown occur concurrently.
 - Active requests receive the configured grace period.
 - Preserve all relevant errors with contextual wrapping and `errors.Join`.
+- Flush tracing after HTTP shutdown with a fresh bounded context. Injected
+  runtimes remain owned by their caller and must not be shut down here.
 - `Run` is designed for one lifecycle; do not call it concurrently on one
   `Server`.
 
