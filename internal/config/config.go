@@ -24,6 +24,8 @@ type Config struct {
 	Routes         []Route        `yaml:"routes"`
 	CircuitBreaker CircuitBreaker `yaml:"circuit_breaker"`
 	RateLimit      RateLimit      `yaml:"rate_limit"`
+	Auth           Auth           `yaml:"auth"`
+	Cache          Cache          `yaml:"cache"`
 }
 
 type HTTPServer struct {
@@ -70,6 +72,41 @@ type Route struct {
 	Upstreams   []string        `yaml:"upstreams"`
 	StripPrefix bool            `yaml:"strip_prefix"`
 	RateLimits  []RateLimitRule `yaml:"rate_limits"`
+	Auth        RouteAuth       `yaml:"auth"`
+	Cache       RouteCache      `yaml:"cache"`
+}
+
+type Auth struct {
+	Providers map[string]JWTProvider `yaml:"providers"`
+}
+
+type JWTProvider struct {
+	JWKSURL     string        `yaml:"jwks_url"`
+	Issuer      string        `yaml:"issuer"`
+	Audience    string        `yaml:"audience"`
+	Algorithms  []string      `yaml:"algorithms"`
+	ClockSkew   time.Duration `yaml:"clock_skew"`
+	HTTPTimeout time.Duration `yaml:"http_timeout"`
+}
+
+type RouteAuth struct {
+	Required       bool     `yaml:"required"`
+	Provider       string   `yaml:"provider"`
+	RequiredScopes []string `yaml:"required_scopes"`
+}
+
+type Cache struct {
+	Enabled          bool          `yaml:"enabled"`
+	OnBackendError   string        `yaml:"on_backend_error"`
+	OperationTimeout time.Duration `yaml:"operation_timeout"`
+	MaxBodyBytes     int64         `yaml:"max_body_bytes"`
+	Redis            Redis         `yaml:"redis"`
+}
+
+type RouteCache struct {
+	Enabled     bool          `yaml:"enabled"`
+	TTL         time.Duration `yaml:"ttl"`
+	VaryHeaders []string      `yaml:"vary_headers"`
 }
 
 type RateLimit struct {
@@ -167,6 +204,8 @@ func defaults() Config {
 			OperationTimeout: 100 * time.Millisecond,
 			Redis:            Redis{Address: "localhost:6379", KeyPrefix: "gateway:ratelimit"},
 		},
+		Cache: Cache{OnBackendError: "allow", OperationTimeout: 100 * time.Millisecond,
+			MaxBodyBytes: 1 << 20, Redis: Redis{Address: "localhost:6379", KeyPrefix: "gateway:cache"}},
 	}
 }
 
@@ -199,6 +238,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.validateRateLimits(); err != nil {
+		return err
+	}
+	if err := c.validateAuthAndCache(); err != nil {
 		return err
 	}
 	if c.Retry.MaxAttempts < 1 || c.Retry.MaxAttempts > 10 {
@@ -248,6 +290,46 @@ func (c Config) Validate() error {
 				return fmt.Errorf("route %d: duplicate upstream %q", i, rawUpstream)
 			}
 			seenUpstreams[upstream.String()] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func (c Config) validateAuthAndCache() error {
+	for name, provider := range c.Auth.Providers {
+		if name == "" || provider.JWKSURL == "" || provider.Issuer == "" || provider.Audience == "" {
+			return fmt.Errorf("auth provider %q requires jwks_url, issuer, and audience", name)
+		}
+		u, err := url.Parse(provider.JWKSURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("auth provider %q jwks_url must use http or https", name)
+		}
+		if len(provider.Algorithms) == 0 || provider.ClockSkew < 0 || provider.HTTPTimeout <= 0 {
+			return fmt.Errorf("auth provider %q requires algorithms, non-negative clock_skew, and positive http_timeout", name)
+		}
+		for _, algorithm := range provider.Algorithms {
+			if algorithm != "RS256" {
+				return fmt.Errorf("auth provider %q: unsupported algorithm %q", name, algorithm)
+			}
+		}
+	}
+	if c.Cache.OnBackendError != "allow" && c.Cache.OnBackendError != "deny" {
+		return errors.New("cache on_backend_error must be allow or deny")
+	}
+	if c.Cache.OperationTimeout <= 0 || c.Cache.MaxBodyBytes <= 0 {
+		return errors.New("cache operation_timeout and max_body_bytes must be positive")
+	}
+	if c.Cache.Enabled && (c.Cache.Redis.Address == "" || c.Cache.Redis.KeyPrefix == "") {
+		return errors.New("enabled cache requires Redis address and key prefix")
+	}
+	for i, route := range c.Routes {
+		if route.Auth.Required {
+			if _, ok := c.Auth.Providers[route.Auth.Provider]; !ok {
+				return fmt.Errorf("route %d references unknown auth provider %q", i, route.Auth.Provider)
+			}
+		}
+		if route.Cache.Enabled && (!c.Cache.Enabled || route.Cache.TTL <= 0) {
+			return fmt.Errorf("route %d cache requires global cache and positive ttl", i)
 		}
 	}
 	return nil
@@ -487,6 +569,105 @@ func (r *RateLimitRule) UnmarshalYAML(value *yaml.Node) error {
 	}
 	type plain RateLimitRule
 	return value.Decode((*plain)(r))
+}
+
+func (a *Auth) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "providers"); err != nil {
+		return err
+	}
+	type plain Auth
+	return value.Decode((*plain)(a))
+}
+
+func (p *JWTProvider) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "jwks_url", "issuer", "audience", "algorithms", "clock_skew", "http_timeout"); err != nil {
+		return err
+	}
+	var v struct {
+		JWKSURL     string   `yaml:"jwks_url"`
+		Issuer      string   `yaml:"issuer"`
+		Audience    string   `yaml:"audience"`
+		Algorithms  []string `yaml:"algorithms"`
+		ClockSkew   string   `yaml:"clock_skew"`
+		HTTPTimeout string   `yaml:"http_timeout"`
+	}
+	if err := value.Decode(&v); err != nil {
+		return err
+	}
+	p.JWKSURL, p.Issuer, p.Audience, p.Algorithms = v.JWKSURL, v.Issuer, v.Audience, v.Algorithms
+	return parseDurations(map[string]struct {
+		raw string
+		dst *time.Duration
+	}{
+		"clock_skew": {v.ClockSkew, &p.ClockSkew}, "http_timeout": {v.HTTPTimeout, &p.HTTPTimeout},
+	})
+}
+
+func (a *RouteAuth) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "required", "provider", "required_scopes"); err != nil {
+		return err
+	}
+	type plain RouteAuth
+	return value.Decode((*plain)(a))
+}
+
+func (c *Cache) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "enabled", "on_backend_error", "operation_timeout", "max_body_bytes", "redis"); err != nil {
+		return err
+	}
+	type raw struct {
+		Enabled          bool   `yaml:"enabled"`
+		OnBackendError   string `yaml:"on_backend_error"`
+		OperationTimeout string `yaml:"operation_timeout"`
+		MaxBodyBytes     int64  `yaml:"max_body_bytes"`
+		Redis            Redis  `yaml:"redis"`
+	}
+	var v raw
+	if err := value.Decode(&v); err != nil {
+		return err
+	}
+	c.Enabled = v.Enabled
+	if v.OnBackendError != "" {
+		c.OnBackendError = v.OnBackendError
+	}
+	if v.MaxBodyBytes != 0 {
+		c.MaxBodyBytes = v.MaxBodyBytes
+	}
+	if v.Redis.Address != "" {
+		c.Redis = v.Redis
+	}
+	if v.OperationTimeout != "" {
+		d, err := time.ParseDuration(v.OperationTimeout)
+		if err != nil {
+			return fmt.Errorf("operation_timeout: %w", err)
+		}
+		c.OperationTimeout = d
+	}
+	return nil
+}
+
+func (c *RouteCache) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "enabled", "ttl", "vary_headers"); err != nil {
+		return err
+	}
+	type raw struct {
+		Enabled     bool     `yaml:"enabled"`
+		TTL         string   `yaml:"ttl"`
+		VaryHeaders []string `yaml:"vary_headers"`
+	}
+	var v raw
+	if err := value.Decode(&v); err != nil {
+		return err
+	}
+	c.Enabled, c.VaryHeaders = v.Enabled, v.VaryHeaders
+	if v.TTL != "" {
+		d, err := time.ParseDuration(v.TTL)
+		if err != nil {
+			return fmt.Errorf("ttl: %w", err)
+		}
+		c.TTL = d
+	}
+	return nil
 }
 
 func (t *TokenBucket) UnmarshalYAML(value *yaml.Node) error {

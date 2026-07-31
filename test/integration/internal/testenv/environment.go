@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Djunichi/APIGateway/internal/cache"
 	"github.com/Djunichi/APIGateway/internal/config"
 	"github.com/Djunichi/APIGateway/internal/ratelimit"
 	"github.com/Djunichi/APIGateway/internal/server"
@@ -28,6 +29,11 @@ type settings struct {
 	userStatuses map[int][]int
 	rateLimit    config.RateLimit
 	rateStore    ratelimit.Store
+	auth         config.Auth
+	routeAuth    config.RouteAuth
+	cache        config.Cache
+	routeCache   config.RouteCache
+	cacheStore   cache.Store
 }
 
 // WithRateLimit configures rate limiting with a scenario-provided store.
@@ -35,6 +41,16 @@ func WithRateLimit(cfg config.RateLimit, store ratelimit.Store) Option {
 	return func(settings *settings) {
 		settings.rateLimit, settings.rateStore = cfg, store
 	}
+}
+
+// WithAuth protects the users route with a JWT provider.
+func WithAuth(cfg config.Auth, route config.RouteAuth) Option {
+	return func(settings *settings) { settings.auth, settings.routeAuth = cfg, route }
+}
+
+// WithCache enables response caching for the users route.
+func WithCache(cfg config.Cache, route config.RouteCache, store cache.Store) Option {
+	return func(settings *settings) { settings.cache, settings.routeCache, settings.cacheStore = cfg, route, store }
 }
 
 // WithCircuitBreaker configures passive circuit breaker tracking.
@@ -120,6 +136,8 @@ func New(t testing.TB, options ...Option) *Environment {
 			PathPrefix:  "/api/",
 			Upstreams:   upstreams,
 			StripPrefix: true,
+			Auth:        cfg.routeAuth,
+			Cache:       cfg.routeCache,
 		})
 	}
 
@@ -146,6 +164,8 @@ func New(t testing.TB, options ...Option) *Environment {
 		Retry:          cfg.retry,
 		CircuitBreaker: cfg.circuit,
 		RateLimit:      cfg.rateLimit,
+		Auth:           cfg.auth,
+		Cache:          cfg.cache,
 		Routes:         routes,
 	}
 
@@ -165,6 +185,9 @@ func New(t testing.TB, options ...Option) *Environment {
 			t.Fatal(err)
 		}
 		serverOptions = append(serverOptions, server.WithRateLimitRegistry(registry))
+	}
+	if cfg.cacheStore != nil {
+		serverOptions = append(serverOptions, server.WithCacheStore(cfg.cacheStore))
 	}
 	gateway := server.New(gatewayConfig, slog.New(slog.NewTextHandler(io.Discard, nil)), serverOptions...)
 	go func() {

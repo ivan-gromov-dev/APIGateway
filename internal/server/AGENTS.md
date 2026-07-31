@@ -9,17 +9,18 @@ and administrative HTTP servers.
 
 `Server.Run` currently:
 
-1. creates metrics and the route-aware proxy;
-2. builds the middleware chain;
-3. constructs public and admin `http.Server` values;
-4. opens the public listener;
-5. opens the admin listener;
-6. marks readiness true;
-7. serves both listeners concurrently;
-8. waits for context cancellation or a server failure;
-9. marks readiness false;
-10. gracefully shuts both servers down in parallel;
-11. joins runtime and shutdown errors.
+1. creates metrics and prepares Redis-backed optional features;
+2. prepares configured JWT verifiers and the route-aware proxy;
+3. builds the middleware chain;
+4. constructs public and admin `http.Server` values;
+5. opens the public listener;
+6. opens the admin listener;
+7. marks readiness true;
+8. serves both listeners concurrently;
+9. waits for context cancellation or a server failure;
+10. marks readiness false;
+11. gracefully shuts both servers down in parallel;
+12. joins runtime and shutdown errors.
 
 Do not mark ready before every required listener is open. If admin listener
 creation fails, close the already-open public listener.

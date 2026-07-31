@@ -19,7 +19,9 @@ operational endpoints, graceful shutdown, and real-network integration testing.
 - Retries across upstreams for safe, replayable requests
 - Passive upstream health tracking with per-instance circuit breakers
 - Redis-backed global and per-route Token Bucket rate limiting
-- Docker Compose demo with Users and Billing services
+- Route-level JWT authentication using asymmetric signatures and JWKS
+- Redis-backed response caching for explicitly enabled public routes
+- Docker Compose demo with Users, Billing, Redis, and a demo identity service
 - Parallel GitHub Actions jobs for build, unit tests, and integration tests
 
 ## Architecture
@@ -59,13 +61,28 @@ docker compose up --build
 Try the available endpoints:
 
 ```bash
-curl http://localhost:8080/api/hello
-curl http://localhost:8080/api/users
-curl http://localhost:8080/api/users/42
 curl http://localhost:8080/api/billing/invoices
 curl http://localhost:8080/api/billing/invoices/inv-1002
 curl -X POST http://localhost:8080/api/billing/payments
 ```
+
+The Users route is protected. In PowerShell, obtain a short-lived demo token
+and call it with:
+
+```powershell
+$token = (Invoke-RestMethod -Method Post `
+  -Uri http://localhost:8084/token `
+  -Authentication Basic `
+  -Credential ([pscredential]::new('gateway-demo', (ConvertTo-SecureString 'gateway-demo-secret' -AsPlainText -Force))) `
+  -Body @{ grant_type = 'client_credentials'; scope = 'users.read' }).access_token
+
+Invoke-RestMethod http://localhost:8080/api/users `
+  -Headers @{ Authorization = "Bearer $token" }
+```
+
+The identity service is deliberately demo-only: it has one client, keeps its
+ephemeral signing key in memory, supports only `client_credentials`, and does
+not implement users, refresh tokens, registration, or persistent key rotation.
 
 Repeat a Users request to see `backend-1`, `backend-2`, and `backend-3`
 rotate in the response.
@@ -125,6 +142,45 @@ Built-in keys are `global` and `client_ip`, and filters are `all` and
 `writes_only`. Exceeding a rule returns `429` with `Retry-After`. The gateway
 talks through the Redis protocol, so the backend may be Redis itself or another
 Redis-compatible server.
+
+JWT authentication is opt-in per route. The gateway validates an explicit
+`RS256` algorithm allowlist, JWKS key ID, signature, issuer, audience,
+expiration, not-before, and required scopes. Tokens are issued by an external
+identity provider; the gateway never issues or logs them. Verified subjects are
+forwarded in `X-Authenticated-Subject` after any client-supplied value is
+removed.
+
+### Keycloak provider demo
+
+An optional Keycloak setup demonstrates the same gateway contract against a
+real OIDC provider. Start it from the repository root:
+
+```powershell
+docker compose -f docker-compose.yml -f deployments/keycloak/docker-compose.yml up --build
+```
+
+Request a service-account token and call the protected route:
+
+```powershell
+$token = (Invoke-RestMethod -Method Post `
+  -Uri http://localhost:8085/realms/gateway-demo/protocol/openid-connect/token `
+  -Body @{ client_id = 'gateway-demo'; client_secret = 'gateway-demo-secret'; grant_type = 'client_credentials' }).access_token
+
+Invoke-RestMethod http://localhost:8080/api/users `
+  -Headers @{ Authorization = "Bearer $token" }
+```
+
+Keycloak runs in development mode and imports
+`deployments/keycloak/gateway-demo-realm.json`; its credentials are strictly
+for local demonstration. The lightweight identity service remains available on
+port `8084`, but the gateway uses Keycloak while the override is active.
+
+Response caching is also opt-in per route and uses Redis with bounded operation
+timeouts and response sizes. Only public `GET` and `HEAD` requests are eligible.
+Requests containing `Authorization`, and responses containing `Set-Cookie`,
+`Cache-Control: private`, or `Cache-Control: no-store`, bypass storage. Cache
+failures allow upstream traffic by default. The Docker Billing route
+demonstrates a 30-second TTL and returns `X-Cache: MISS` or `X-Cache: HIT`.
 
 Environment variables override selected configuration values:
 
@@ -233,7 +289,7 @@ GitHub Actions runs three independent jobs in parallel:
 
 | Job                 | Checks                                                                 |
 | ------------------- | ---------------------------------------------------------------------- |
-| `build`             | Builds Gateway, Users, and Billing binaries                            |
+| `build`             | Builds Gateway, Users, Billing, and demo Identity binaries             |
 | `unit-tests`        | Runs `go vet`, race-enabled unit tests, and per-package coverage gates |
 | `integration-tests` | Runs the real-network integration suite with the race detector         |
 
@@ -276,6 +332,18 @@ The skill reads all applicable `AGENTS.md` files, reviews architecture and Go
 semantics, runs relevant non-mutating checks, and reports prioritized findings.
 It is stored in [`.codex/skills/review-api-gateway`](.codex/skills/review-api-gateway).
 
+For new features, start with the implementation workflow:
+
+```text
+Use $implement-api-gateway-feature to plan and implement <feature>.
+```
+
+It supports plan-only and implementation requests, establishes package and
+configuration boundaries, adds the appropriate tests and documentation, and
+runs the repository validation gate. Follow it with `$review-api-gateway` before
+commit or PR. The skill is stored in
+[`.codex/skills/implement-api-gateway-feature`](.codex/skills/implement-api-gateway-feature).
+
 ## Project layout
 
 ```text
@@ -285,9 +353,13 @@ It is stored in [`.codex/skills/review-api-gateway`](.codex/skills/review-api-ga
 ├── deployments/                    backend container definitions
 ├── examples/
 │   ├── backend/                    demo Users service
-│   └── billing/                    demo Billing service
+│   ├── billing/                    demo Billing service
+│   └── identity/                   demo token issuer and JWKS endpoint
 ├── internal/
 │   ├── balancer/                   balancer contract and Round Robin
+│   ├── auth/                       JWT and JWKS verification
+│   ├── cache/                      response-cache contract
+│   ├── cachestore/redis/           Redis response-cache persistence
 │   ├── circuitbreaker/              circuit breaker state machine
 │   ├── config/                     loading and strict validation
 │   ├── logger/                     structured logger construction
@@ -309,6 +381,5 @@ It is stored in [`.codex/skills/review-api-gateway`](.codex/skills/review-api-ga
 
 ## Roadmap
 
-- JWT authentication and response caching
 - Configuration reload and OpenTelemetry
 - gRPC proxying and service discovery

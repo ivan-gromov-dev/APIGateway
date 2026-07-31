@@ -11,6 +11,8 @@ creation, forwarding headers, prefix stripping, and proxy error responses.
 - `Handler` wires the default Round Robin implementation.
 - `HandlerWithBalancer` accepts a factory for substitution and tests.
 - Every route receives a separate balancer instance.
+- Route authentication, rate limiting, and response caching wrap the route
+  proxy in that order; cache hits cannot bypass authentication or limiting.
 - `http.ServeMux` chooses the most specific registered prefix.
 - The retry transport selects a health-eligible target for every attempt and
   joins its base URL with the incoming request path.

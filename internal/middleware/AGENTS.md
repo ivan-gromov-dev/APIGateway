@@ -15,6 +15,8 @@ business logic.
   updates the metrics collector.
 - `Timeout` uses `http.TimeoutHandler` when duration is positive.
 - `CORS` handles allowed origins and OPTIONS preflight responses.
+- `Authentication` verifies Bearer tokens and installs a trusted principal.
+- `ResponseCache` caches bounded, public GET/HEAD responses through a Store.
 
 The order configured in `server.Run` is observable. The first declared
 middleware is the outermost wrapper.

@@ -28,7 +28,7 @@ func TestLoad(t *testing.T) {
 }
 
 func TestExampleConfigurations(t *testing.T) {
-	for _, name := range []string{"gateway.yaml", "gateway.docker.yaml"} {
+	for _, name := range []string{"gateway.yaml", "gateway.docker.yaml", "gateway.keycloak.yaml"} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Load(filepath.Join("..", "..", "configs", name)); err != nil {
 				t.Fatal(err)
@@ -125,6 +125,77 @@ routes:
 	}
 }
 
+func TestLoadAuthAndCacheConfiguration(t *testing.T) {
+	cfg, err := loadYAML(t, `
+auth:
+  providers:
+    main:
+      jwks_url: https://identity.example/jwks
+      issuer: https://identity.example
+      audience: gateway
+      algorithms: [RS256]
+      clock_skew: 30s
+      http_timeout: 2s
+cache:
+  enabled: true
+  on_backend_error: deny
+  operation_timeout: 50ms
+  max_body_bytes: 2048
+  redis:
+    address: redis:6379
+    key_prefix: gateway:cache
+routes:
+  - path_prefix: /api/
+    upstreams: [http://localhost:8081]
+    auth:
+      required: true
+      provider: main
+      required_scopes: [users.read]
+    cache:
+      enabled: true
+      ttl: 1m
+      vary_headers: [Accept]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Auth.Providers["main"].ClockSkew != 30*time.Second ||
+		cfg.Routes[0].Cache.TTL != time.Minute || cfg.Cache.MaxBodyBytes != 2048 {
+		t.Fatalf("configuration = %+v", cfg)
+	}
+}
+
+func TestValidateRejectsInvalidAuthAndCache(t *testing.T) {
+	base := func() Config {
+		cfg := defaults()
+		cfg.Routes = []Route{{PathPrefix: "/api/", Upstreams: []string{"http://localhost:8081"}}}
+		return cfg
+	}
+	tests := map[string]func(*Config){
+		"provider fields": func(c *Config) { c.Auth.Providers = map[string]JWTProvider{"x": {}} },
+		"jwks url": func(c *Config) {
+			c.Auth.Providers = map[string]JWTProvider{"x": {JWKSURL: "file:///x", Issuer: "i", Audience: "a", Algorithms: []string{"RS256"}, HTTPTimeout: time.Second}}
+		},
+		"algorithm": func(c *Config) {
+			c.Auth.Providers = map[string]JWTProvider{"x": {JWKSURL: "https://x/jwks", Issuer: "i", Audience: "a", Algorithms: []string{"none"}, HTTPTimeout: time.Second}}
+		},
+		"unknown provider": func(c *Config) { c.Routes[0].Auth = RouteAuth{Required: true, Provider: "missing"} },
+		"cache policy":     func(c *Config) { c.Cache.OnBackendError = "sometimes" },
+		"cache bounds":     func(c *Config) { c.Cache.MaxBodyBytes = 0 },
+		"cache redis":      func(c *Config) { c.Cache.Enabled = true; c.Cache.Redis.Address = "" },
+		"route cache":      func(c *Config) { c.Routes[0].Cache.Enabled = true },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			cfg := base()
+			mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
 func TestLoadPartialCircuitBreakerConfigurationPreservesDefaults(t *testing.T) {
 	cfg, err := loadYAML(t, `
 circuit_breaker:
@@ -210,6 +281,9 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 		"retry":           "retry:\n  unknown: true\n",
 		"circuit breaker": "circuit_breaker:\n  unknown: true\n",
 		"route":           "routes:\n  - path_prefix: /api/\n    upstreams: [http://localhost:8081]\n    unknown: true\n",
+		"auth":            "auth:\n  unknown: true\n",
+		"provider":        "auth:\n  providers:\n    x:\n      unknown: true\n",
+		"cache":           "cache:\n  unknown: true\n",
 	}
 	for name, fragment := range tests {
 		t.Run(name, func(t *testing.T) {

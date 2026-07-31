@@ -1,0 +1,4 @@
+interface:
+  display_name: "Implement API Gateway Feature"
+  short_description: "Plan and implement gateway features safely"
+  default_prompt: "Use $implement-api-gateway-feature to plan and implement this API Gateway feature."

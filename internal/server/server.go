@@ -12,6 +12,9 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/Djunichi/APIGateway/internal/auth"
+	"github.com/Djunichi/APIGateway/internal/cache"
+	cacheredis "github.com/Djunichi/APIGateway/internal/cachestore/redis"
 	"github.com/Djunichi/APIGateway/internal/config"
 	"github.com/Djunichi/APIGateway/internal/metrics"
 	"github.com/Djunichi/APIGateway/internal/middleware"
@@ -25,12 +28,17 @@ type Server struct {
 	logger       *slog.Logger
 	ready        atomic.Bool
 	rateRegistry *ratelimit.Registry
+	cacheStore   cache.Store
 }
 
 type Option func(*Server)
 
 func WithRateLimitRegistry(registry *ratelimit.Registry) Option {
 	return func(server *Server) { server.rateRegistry = registry }
+}
+
+func WithCacheStore(store cache.Store) Option {
+	return func(server *Server) { server.cacheStore = store }
 }
 
 func New(cfg config.Config, logger *slog.Logger, options ...Option) *Server {
@@ -48,7 +56,17 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 	defer closeRateLimit()
-	proxyHandler, err := proxy.HandlerWithRateLimit(s.cfg.Routes, s.cfg.Retry, s.cfg.CircuitBreaker, s.cfg.RateLimit, registry, s.logger)
+	verifiers, err := s.prepareAuth(ctx)
+	if err != nil {
+		return err
+	}
+	cacheStore, closeCache, err := s.prepareCache(ctx)
+	if err != nil {
+		return err
+	}
+	defer closeCache()
+	proxyHandler, err := proxy.HandlerWithFeatures(s.cfg.Routes, s.cfg.Retry, s.cfg.CircuitBreaker,
+		s.cfg.RateLimit, registry, verifiers, s.cfg.Cache, cacheStore, s.logger)
 	if err != nil {
 		return err
 	}
@@ -105,6 +123,43 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	return errors.Join(runErr, shutdownErr)
+}
+
+func (s *Server) prepareAuth(ctx context.Context) (map[string]*auth.Verifier, error) {
+	result := make(map[string]*auth.Verifier, len(s.cfg.Auth.Providers))
+	for name, provider := range s.cfg.Auth.Providers {
+		verifier, err := auth.New(ctx, auth.Config{
+			JWKSURL: provider.JWKSURL, Issuer: provider.Issuer, Audience: provider.Audience,
+			Algorithms: provider.Algorithms, ClockSkew: provider.ClockSkew, HTTPTimeout: provider.HTTPTimeout,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("prepare auth provider %q: %w", name, err)
+		}
+		result[name] = verifier
+	}
+	return result, nil
+}
+
+func (s *Server) prepareCache(ctx context.Context) (cache.Store, func(), error) {
+	if !s.cfg.Cache.Enabled {
+		return nil, func() {}, nil
+	}
+	if s.cacheStore != nil {
+		return s.cacheStore, func() {}, nil
+	}
+	store := cacheredis.New(cacheredis.Config{
+		Address: s.cfg.Cache.Redis.Address, Username: s.cfg.Cache.Redis.Username,
+		Password: s.cfg.Cache.Redis.Password, Database: s.cfg.Cache.Redis.Database,
+		KeyPrefix: s.cfg.Cache.Redis.KeyPrefix,
+	})
+	pingCtx, cancel := context.WithTimeout(ctx, s.cfg.Cache.OperationTimeout)
+	err := store.Ping(pingCtx)
+	cancel()
+	if err != nil {
+		_ = store.Close()
+		return nil, func() {}, fmt.Errorf("connect cache Redis: %w", err)
+	}
+	return store, func() { _ = store.Close() }, nil
 }
 
 func (s *Server) prepareRateLimit(ctx context.Context) (*ratelimit.Registry, func(), error) {

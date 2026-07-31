@@ -11,7 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Djunichi/APIGateway/internal/auth"
 	"github.com/Djunichi/APIGateway/internal/balancer"
+	"github.com/Djunichi/APIGateway/internal/cache"
 	"github.com/Djunichi/APIGateway/internal/circuitbreaker"
 	"github.com/Djunichi/APIGateway/internal/config"
 	"github.com/Djunichi/APIGateway/internal/middleware"
@@ -28,7 +30,13 @@ func Handler(routes []config.Route, retry config.Retry, circuit config.CircuitBr
 }
 
 func HandlerWithRateLimit(routes []config.Route, retry config.Retry, circuit config.CircuitBreaker, rate config.RateLimit, registry *ratelimit.Registry, logger *slog.Logger) (http.Handler, error) {
-	return handlerWithBalancer(routes, retry, circuit, rate, registry, logger, func(upstreams []*upstream.Target) (balancer.Balancer, error) {
+	return HandlerWithFeatures(routes, retry, circuit, rate, registry, nil, config.Cache{}, nil, logger)
+}
+
+func HandlerWithFeatures(routes []config.Route, retry config.Retry, circuit config.CircuitBreaker,
+	rate config.RateLimit, registry *ratelimit.Registry, verifiers map[string]*auth.Verifier,
+	cacheConfig config.Cache, cacheStore cache.Store, logger *slog.Logger) (http.Handler, error) {
+	return handlerWithFeatures(routes, retry, circuit, rate, registry, verifiers, cacheConfig, cacheStore, logger, func(upstreams []*upstream.Target) (balancer.Balancer, error) {
 		return balancer.NewRoundRobin(upstreams)
 	})
 }
@@ -55,12 +63,21 @@ func HandlerWithBalancer(
 	logger *slog.Logger,
 	newBalancer balancer.Factory,
 ) (http.Handler, error) {
-	return handlerWithBalancer(routes, retry, circuit, config.RateLimit{}, nil, logger, newBalancer)
+	return handlerWithFeatures(routes, retry, circuit, config.RateLimit{}, nil, nil, config.Cache{}, nil, logger, newBalancer)
 }
 
 func handlerWithBalancer(
 	routes []config.Route, retry config.Retry, circuit config.CircuitBreaker,
 	rate config.RateLimit, registry *ratelimit.Registry, logger *slog.Logger,
+	newBalancer balancer.Factory,
+) (http.Handler, error) {
+	return handlerWithFeatures(routes, retry, circuit, rate, registry, nil, config.Cache{}, nil, logger, newBalancer)
+}
+
+func handlerWithFeatures(
+	routes []config.Route, retry config.Retry, circuit config.CircuitBreaker,
+	rate config.RateLimit, registry *ratelimit.Registry, verifiers map[string]*auth.Verifier,
+	cacheConfig config.Cache, cacheStore cache.Store, logger *slog.Logger,
 	newBalancer balancer.Factory,
 ) (http.Handler, error) {
 	if newBalancer == nil {
@@ -113,12 +130,25 @@ func handlerWithBalancer(
 		if route.StripPrefix {
 			handler = http.StripPrefix(strings.TrimSuffix(route.PathPrefix, "/"), handler)
 		}
+		if route.Cache.Enabled {
+			if cacheStore == nil {
+				return nil, fmt.Errorf("cache store is required for route %q", route.PathPrefix)
+			}
+			handler = middleware.ResponseCache(cacheStore, cacheConfig, route.Cache, route.PathPrefix)(handler)
+		}
 		if rate.Enabled && len(route.RateLimits) > 0 {
 			rateMiddleware, err := middleware.BuildRateLimit(route.RateLimits, rate, registry)
 			if err != nil {
 				return nil, fmt.Errorf("build rate limit for route %q: %w", route.PathPrefix, err)
 			}
 			handler = rateMiddleware(handler)
+		}
+		if route.Auth.Required {
+			verifier := verifiers[route.Auth.Provider]
+			if verifier == nil {
+				return nil, fmt.Errorf("auth provider %q is unavailable", route.Auth.Provider)
+			}
+			handler = middleware.Authentication(verifier, route.Auth.RequiredScopes)(handler)
 		}
 		mux.Handle(route.PathPrefix, handler)
 	}

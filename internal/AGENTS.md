@@ -22,6 +22,8 @@ balancer ──► proxy ───┼──► server
 config ─────► proxy ──┘
 config ─────► logger
 config ─────► middleware ─► metrics
+auth ───────► middleware
+cache ──────► middleware
 metrics ───────────────────► server
 ```
 

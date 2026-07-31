@@ -35,5 +35,6 @@ mkdir -p .cache/verify
 go build -o .cache/verify/gateway ./cmd/gateway
 go build -o .cache/verify/users ./examples/backend
 go build -o .cache/verify/billing ./examples/billing
+go build -o .cache/verify/identity ./examples/identity
 
 echo "Verification completed successfully."
