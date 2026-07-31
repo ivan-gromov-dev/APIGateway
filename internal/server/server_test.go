@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Djunichi/APIGateway/internal/cache"
 	"github.com/Djunichi/APIGateway/internal/config"
 	"github.com/Djunichi/APIGateway/internal/metrics"
 	"github.com/Djunichi/APIGateway/internal/ratelimit"
@@ -87,6 +88,59 @@ type serverStore struct{}
 
 func (serverStore) Take(context.Context, ratelimit.TakeRequest) (ratelimit.TakeResult, error) {
 	return ratelimit.TakeResult{Allowed: true}, nil
+}
+
+type serverCacheStore struct{}
+
+func (serverCacheStore) Get(context.Context, string) (cache.Entry, bool, error) {
+	return cache.Entry{}, false, nil
+}
+func (serverCacheStore) Set(context.Context, string, cache.Entry, time.Duration) error { return nil }
+
+func TestPrepareOptionalFeatures(t *testing.T) {
+	gateway := New(testConfig(":1", ":2", "http://localhost"), discardLogger(), WithCacheStore(serverCacheStore{}))
+	store, closeStore, err := gateway.prepareCache(context.Background())
+	if err != nil || store != nil {
+		t.Fatalf("disabled cache store=%v err=%v", store, err)
+	}
+	closeStore()
+	gateway.cfg.Cache = config.Cache{Enabled: true, OperationTimeout: time.Second}
+	store, closeStore, err = gateway.prepareCache(context.Background())
+	if err != nil || store == nil {
+		t.Fatalf("external cache store=%v err=%v", store, err)
+	}
+	closeStore()
+	verifiers, err := gateway.prepareAuth(context.Background())
+	if err != nil || len(verifiers) != 0 {
+		t.Fatalf("verifiers=%v err=%v", verifiers, err)
+	}
+}
+
+func TestPrepareAuthProvider(t *testing.T) {
+	jwks := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"keys":[{"kty":"RSA","kid":"one","use":"sig","alg":"RS256","n":"AQ","e":"Aw"}]}`))
+	}))
+	defer jwks.Close()
+	cfg := testConfig(":1", ":2", "http://localhost")
+	cfg.Auth.Providers = map[string]config.JWTProvider{"main": {
+		JWKSURL: jwks.URL, Issuer: "issuer", Audience: "audience",
+		Algorithms: []string{"RS256"}, HTTPTimeout: time.Second,
+	}}
+	verifiers, err := New(cfg, discardLogger()).prepareAuth(context.Background())
+	if err != nil || verifiers["main"] == nil {
+		t.Fatalf("verifiers=%v err=%v", verifiers, err)
+	}
+}
+
+func TestPrepareCacheReportsRedisFailure(t *testing.T) {
+	cfg := testConfig(":1", ":2", "http://localhost")
+	cfg.Cache = config.Cache{
+		Enabled: true, OperationTimeout: 20 * time.Millisecond,
+		Redis: config.Redis{Address: "127.0.0.1:1", KeyPrefix: "test"},
+	}
+	if _, _, err := New(cfg, discardLogger()).prepareCache(context.Background()); err == nil {
+		t.Fatal("expected Redis connection error")
+	}
 }
 
 func TestRunGracefullyWaitsForActiveRequest(t *testing.T) {

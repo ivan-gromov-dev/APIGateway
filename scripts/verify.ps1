@@ -50,6 +50,10 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "billing-service build failed"
     }
+    go build -o .cache/verify/identity.exe ./examples/identity
+    if ($LASTEXITCODE -ne 0) {
+        throw "identity-service build failed"
+    }
 
     Write-Host "Verification completed successfully."
 } finally {

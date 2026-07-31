@@ -7,6 +7,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      identity:
+        condition: service_healthy
       backend-1:
         condition: service_started
       backend-2:
@@ -20,6 +22,21 @@ services:
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 1s
+      retries: 10
+  identity:
+    build:
+      context: .
+      dockerfile: deployments/identity.Dockerfile
+    ports:
+      - "8084:8084"
+    environment:
+      IDENTITY_ISSUER: http://identity:8084
+      IDENTITY_CLIENT_ID: gateway-demo
+      IDENTITY_CLIENT_SECRET: gateway-demo-secret
+    healthcheck:
+      test: ["CMD", "/identity", "-healthcheck", "http://localhost:8084/healthz"]
       interval: 2s
       timeout: 1s
       retries: 10

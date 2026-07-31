@@ -42,11 +42,14 @@ changes.
 - `internal/limiter` owns Token Bucket policy wiring.
 - `internal/ratestore/redis` owns atomic Redis rate-limit persistence.
 - `internal/ratelimit` contains store, key, filter, and registry contracts.
+- `internal/auth` owns JWT and JWKS verification.
+- `internal/cache` owns response-cache contracts.
+- `internal/cachestore/redis` owns Redis response-cache persistence.
 - `internal/proxy` owns route-specific reverse proxy construction.
 - `internal/middleware` owns composable HTTP cross-cutting behaviour.
 - `internal/metrics` and `internal/logger` own observability primitives.
 - `internal/server` owns public/admin listeners, readiness, and shutdown.
-- `examples` contains demo services, not gateway business logic.
+- `examples` contains demo upstream and identity services, not gateway business logic.
 - `test/integration` contains real-network behavioral scenarios.
 - `test/load` contains manual performance scenarios and local result files.
 - `scripts` contains the cross-platform verification harness.
@@ -99,7 +102,7 @@ sh scripts/verify.sh
 ```
 
 The full validation checks formatting, `go vet`, unit/integration tests, and
-builds Gateway, Users, and Billing. Use `-Race` or `RACE=1` when the local
+builds Gateway, Users, Billing, and demo Identity. Use `-Race` or `RACE=1` when the local
 platform has a working C toolchain.
 
 Local verification does not replace CI's per-package coverage gate. CI runs

@@ -43,11 +43,33 @@ rate_limit:
         requests_per_second: 1000
         burst: 1500
         ttl: 10m
+auth:
+  providers:
+    demo:
+      jwks_url: http://identity:8084/.well-known/jwks.json
+      issuer: http://identity:8084
+      audience: api-gateway
+      algorithms: [RS256]
+      clock_skew: 30s
+      http_timeout: 2s
+cache:
+  enabled: true
+  on_backend_error: allow
+  operation_timeout: 100ms
+  max_body_bytes: 1048576
+  redis:
+    address: redis:6379
+    database: 0
+    key_prefix: gateway:cache
 routes:
   - path_prefix: /api/billing/
     upstreams:
       - http://billing:8091
     strip_prefix: true
+    cache:
+      enabled: true
+      ttl: 30s
+      vary_headers: [Accept]
     rate_limits:
       - name: billing-writes
         key: client_ip
@@ -62,3 +84,7 @@ routes:
       - http://backend-2:8081
       - http://backend-3:8081
     strip_prefix: true
+    auth:
+      required: true
+      provider: demo
+      required_scopes: [users.read]

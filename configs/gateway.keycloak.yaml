@@ -4,66 +4,68 @@ server:
   write_timeout: 30s
   idle_timeout: 60s
   shutdown_timeout: 10s
-
 admin:
   address: ":9090"
   read_timeout: 5s
   write_timeout: 10s
-
 log:
   level: info
   format: json
-
 middleware:
   request_timeout: 15s
   cors:
     allowed_origins: ["*"]
     allowed_methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
     allowed_headers: [Accept, Authorization, Content-Type, X-Request-ID]
-
 retry:
   max_attempts: 3
   per_attempt_timeout: 2s
   backoff: 25ms
   statuses: [502, 503, 504]
-
 circuit_breaker:
   failure_threshold: 5
   open_timeout: 30s
   failure_statuses: [502, 503, 504]
-
 rate_limit:
-  enabled: false
+  enabled: true
   default_backend: redis
   on_backend_error: allow
   operation_timeout: 100ms
   redis:
-    address: localhost:6379
+    address: redis:6379
     database: 0
     key_prefix: gateway:ratelimit
   rules: []
-
 auth:
-  providers: {}
-
+  providers:
+    keycloak:
+      jwks_url: http://keycloak:8080/realms/gateway-demo/protocol/openid-connect/certs
+      issuer: http://localhost:8085/realms/gateway-demo
+      audience: gateway-demo
+      algorithms: [RS256]
+      clock_skew: 30s
+      http_timeout: 2s
 cache:
-  enabled: false
+  enabled: true
   on_backend_error: allow
   operation_timeout: 100ms
   max_body_bytes: 1048576
   redis:
-    address: localhost:6379
+    address: redis:6379
     database: 0
     key_prefix: gateway:cache
-
 routes:
   - path_prefix: /api/billing/
-    upstreams:
-      - http://localhost:8091
+    upstreams: [http://billing:8091]
     strip_prefix: true
+    cache:
+      enabled: true
+      ttl: 30s
+      vary_headers: [Accept]
   - path_prefix: /api/
-    upstreams:
-      - http://localhost:8081
-      - http://localhost:8082
-      - http://localhost:8083
+    upstreams: [http://backend-1:8081, http://backend-2:8081, http://backend-3:8081]
     strip_prefix: true
+    auth:
+      required: true
+      provider: keycloak
+      required_scopes: [users.read]

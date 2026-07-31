@@ -29,6 +29,9 @@ fields, or invalid routes.
   passive failure statuses used by the circuit breaker state machine.
 - Each `Route` has a unique absolute `path_prefix`, one or more HTTP(S)
   `upstreams`, and optional prefix stripping.
+- `Config.Auth` contains named JWT/JWKS providers; routes opt into one provider.
+- `Config.Cache` configures Redis response storage; routes opt into a TTL and
+  request headers included in the cache key.
 
 Public and admin addresses must differ. Shutdown timeout must be positive.
 Other configured timeouts cannot be negative. Routes and upstreams cannot be
