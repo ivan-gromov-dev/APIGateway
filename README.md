@@ -15,6 +15,7 @@ operational endpoints, graceful shutdown, and real-network integration testing.
 - Structured logging with `log/slog`
 - Request ID propagation, panic recovery, request logging, timeout, and CORS
 - Prometheus-compatible metrics and Go `pprof`
+- OpenTelemetry traces with W3C context propagation and OTLP export
 - Unit tests, real-network integration tests, and load-test scenarios
 - Retries across upstreams for safe, replayable requests
 - Passive upstream health tracking with per-instance circuit breakers
@@ -182,6 +183,35 @@ Requests containing `Authorization`, and responses containing `Set-Cookie`,
 failures allow upstream traffic by default. The Docker Billing route
 demonstrates a 30-second TTL and returns `X-Cache: MISS` or `X-Cache: HIT`.
 
+### Distributed tracing
+
+Tracing is optional and disabled by default. When enabled, the gateway creates
+an HTTP server span, a span for every proxy attempt, and an HTTP client span for
+upstream and JWKS requests. The outgoing `traceparent` header lets an
+instrumented backend continue the same trace. Structured request logs include
+`trace_id` and `span_id`; Prometheus metrics and `pprof` remain independent.
+
+The gateway exports OTLP/HTTP to an OpenTelemetry Collector rather than
+directly to a vendor backend. Start the demo Collector and Tempo backend with:
+
+```powershell
+docker compose -f docker-compose.yml -f deployments/observability/docker-compose.yml up --build
+```
+
+Tempo's API is exposed at `http://localhost:3200`. A visualization layer such
+as Grafana can be connected later without changing gateway instrumentation.
+
+```yaml
+telemetry:
+  tracing:
+    enabled: false
+    service_name: api-gateway
+    endpoint: localhost:4318
+    insecure: true
+    sample_ratio: 1
+    shutdown_timeout: 5s
+```
+
 Environment variables override selected configuration values:
 
 ```text
@@ -194,6 +224,12 @@ GATEWAY_SERVER_WRITE_TIMEOUT
 GATEWAY_SERVER_IDLE_TIMEOUT
 GATEWAY_SERVER_SHUTDOWN_TIMEOUT
 GATEWAY_MIDDLEWARE_REQUEST_TIMEOUT
+GATEWAY_TELEMETRY_TRACING_ENABLED
+GATEWAY_TELEMETRY_TRACING_SERVICE_NAME
+GATEWAY_TELEMETRY_TRACING_ENDPOINT
+GATEWAY_TELEMETRY_TRACING_INSECURE
+GATEWAY_TELEMETRY_TRACING_SAMPLE_RATIO
+GATEWAY_TELEMETRY_TRACING_SHUTDOWN_TIMEOUT
 ```
 
 For example:
@@ -367,6 +403,7 @@ commit or PR. The skill is stored in
 │   ├── middleware/                 HTTP middleware chain
 │   ├── proxy/                      route-aware reverse proxies
 │   ├── server/                     listeners, readiness, and lifecycle
+│   ├── telemetry/                  OpenTelemetry tracing and propagation
 │   └── upstream/                   upstream instance and health state
 ├── test/
 │   ├── integration/
@@ -381,5 +418,4 @@ commit or PR. The skill is stored in
 
 ## Roadmap
 
-- Configuration reload and OpenTelemetry
 - gRPC proxying and service discovery

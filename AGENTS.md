@@ -49,6 +49,7 @@ changes.
 - `internal/middleware` owns composable HTTP cross-cutting behaviour.
 - `internal/metrics` and `internal/logger` own observability primitives.
 - `internal/server` owns public/admin listeners, readiness, and shutdown.
+- `internal/telemetry` owns optional OpenTelemetry tracing, OTLP export, and propagation.
 - `examples` contains demo upstream and identity services, not gateway business logic.
 - `test/integration` contains real-network behavioral scenarios.
 - `test/load` contains manual performance scenarios and local result files.

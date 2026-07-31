@@ -28,6 +28,10 @@ Add behaviour tests to the relevant top-level scenario file. Extend
 The harness registers cleanup automatically; call `env.Stop()` directly only
 when shutdown itself is part of the scenario.
 
+Tracing scenarios can inject a test provider with `WithTelemetry`. Upstreams
+echo the observed `traceparent`, allowing propagation and trace-ID continuity
+to be asserted without running an external Collector.
+
 Run the suite with:
 
 ```bash

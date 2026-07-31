@@ -85,6 +85,59 @@ routes:
 	}
 }
 
+func TestLoadTelemetryConfiguration(t *testing.T) {
+	cfg, err := loadYAML(t, `
+telemetry:
+  tracing:
+    enabled: true
+    service_name: test-gateway
+    endpoint: collector:4318
+    insecure: false
+    sample_ratio: 0.25
+    shutdown_timeout: 3s
+routes:
+  - path_prefix: /api/
+    upstreams: [http://localhost:8081]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Telemetry.Tracing.Enabled || cfg.Telemetry.Tracing.ServiceName != "test-gateway" ||
+		cfg.Telemetry.Tracing.SampleRatio != 0.25 || cfg.Telemetry.Tracing.ShutdownTimeout != 3*time.Second {
+		t.Fatalf("tracing configuration = %+v", cfg.Telemetry.Tracing)
+	}
+}
+
+func TestValidateRejectsInvalidTracing(t *testing.T) {
+	for name, mutate := range map[string]func(*Tracing){
+		"sample ratio":     func(c *Tracing) { c.SampleRatio = 1.1 },
+		"shutdown timeout": func(c *Tracing) { c.ShutdownTimeout = 0 },
+		"enabled fields":   func(c *Tracing) { c.Enabled = true; c.Endpoint = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := defaults()
+			cfg.Routes = []Route{{PathPrefix: "/", Upstreams: []string{"http://localhost:8081"}}}
+			mutate(&cfg.Telemetry.Tracing)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
+func TestTelemetryEnvironmentOverrides(t *testing.T) {
+	t.Setenv("GATEWAY_TELEMETRY_TRACING_ENABLED", "true")
+	t.Setenv("GATEWAY_TELEMETRY_TRACING_ENDPOINT", "collector:4318")
+	t.Setenv("GATEWAY_TELEMETRY_TRACING_SAMPLE_RATIO", "0.5")
+	cfg, err := loadYAML(t, "routes:\n  - path_prefix: /\n    upstreams: [http://localhost:8081]\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Telemetry.Tracing.Enabled || cfg.Telemetry.Tracing.SampleRatio != 0.5 {
+		t.Fatalf("tracing = %+v", cfg.Telemetry.Tracing)
+	}
+}
+
 func TestLoadRateLimitConfiguration(t *testing.T) {
 	cfg, err := loadYAML(t, `
 rate_limit:

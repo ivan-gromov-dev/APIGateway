@@ -32,6 +32,8 @@ fields, or invalid routes.
 - `Config.Auth` contains named JWT/JWKS providers; routes opt into one provider.
 - `Config.Cache` configures Redis response storage; routes opt into a TTL and
   request headers included in the cache key.
+- `Config.Telemetry.Tracing` configures optional OTLP/HTTP trace export,
+  sampling, service identity, transport security, and bounded shutdown.
 
 Public and admin addresses must differ. Shutdown timeout must be positive.
 Other configured timeouts cannot be negative. Routes and upstreams cannot be

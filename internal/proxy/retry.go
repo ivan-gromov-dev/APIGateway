@@ -13,6 +13,9 @@ import (
 	"github.com/Djunichi/APIGateway/internal/balancer"
 	"github.com/Djunichi/APIGateway/internal/circuitbreaker"
 	"github.com/Djunichi/APIGateway/internal/config"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type retryTransport struct {
@@ -21,9 +24,14 @@ type retryTransport struct {
 	policy          config.Retry
 	statuses        map[int]struct{}
 	failureStatuses map[int]struct{}
+	tracer          trace.Tracer
 }
 
 func newRetryTransport(base http.RoundTripper, upstreams balancer.Balancer, policy config.Retry, failureStatuses []int) http.RoundTripper {
+	return newRetryTransportWithTracing(base, upstreams, policy, failureStatuses, nil)
+}
+
+func newRetryTransportWithTracing(base http.RoundTripper, upstreams balancer.Balancer, policy config.Retry, failureStatuses []int, tracer trace.Tracer) http.RoundTripper {
 	if policy.MaxAttempts < 1 {
 		policy.MaxAttempts = 1
 	}
@@ -40,7 +48,7 @@ func newRetryTransport(base http.RoundTripper, upstreams balancer.Balancer, poli
 	}
 	return &retryTransport{
 		base: base, balancer: upstreams, policy: policy,
-		statuses: statuses, failureStatuses: passiveStatuses,
+		statuses: statuses, failureStatuses: passiveStatuses, tracer: tracer,
 	}
 }
 
@@ -59,9 +67,21 @@ func (t *retryTransport) RoundTrip(request *http.Request) (*http.Response, error
 		if err != nil {
 			return nil, err
 		}
+		var span trace.Span
+		if t.tracer != nil {
+			ctx, started := t.tracer.Start(attemptRequest.Context(), "proxy.attempt", trace.WithSpanKind(trace.SpanKindInternal),
+				trace.WithAttributes(attribute.Int("gateway.retry.attempt", attempt+1), attribute.Int("gateway.retry.max_attempts", attempts)))
+			attemptRequest = attemptRequest.WithContext(ctx)
+			span = started
+		}
 		response, err := t.base.RoundTrip(attemptRequest)
 		completedAt := time.Now()
 		if err != nil {
+			if span != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, "transport failure")
+				span.End()
+			}
 			if request.Context().Err() != nil {
 				done(circuitbreaker.OutcomeNeutral, completedAt)
 			} else {
@@ -75,12 +95,19 @@ func (t *retryTransport) RoundTrip(request *http.Request) (*http.Response, error
 		}
 		if _, failed := t.failureStatuses[response.StatusCode]; failed {
 			done(circuitbreaker.OutcomeFailure, completedAt)
+			if span != nil {
+				span.SetStatus(codes.Error, http.StatusText(response.StatusCode))
+			}
+		}
+		if span != nil {
+			span.SetAttributes(attribute.Int("http.response.status_code", response.StatusCode))
 		}
 		response.Body = &trackedBody{
 			ReadCloser: response.Body,
 			requestCtx: request.Context(),
 			done:       done,
 			cancel:     cancel,
+			span:       span,
 		}
 		if _, retry := t.statuses[response.StatusCode]; !retry || attempt+1 == attempts {
 			return response, nil
@@ -176,6 +203,7 @@ type trackedBody struct {
 	done       circuitbreaker.DoneFunc
 	cancel     context.CancelFunc
 	once       sync.Once
+	span       trace.Span
 }
 
 func (b *trackedBody) Read(buffer []byte) (int, error) {
@@ -202,5 +230,8 @@ func (b *trackedBody) Close() error {
 func (b *trackedBody) complete(outcome circuitbreaker.Outcome) {
 	b.once.Do(func() {
 		b.done(outcome, time.Now())
+		if b.span != nil {
+			b.span.End()
+		}
 	})
 }

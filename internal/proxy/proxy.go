@@ -19,6 +19,7 @@ import (
 	"github.com/Djunichi/APIGateway/internal/middleware"
 	"github.com/Djunichi/APIGateway/internal/ratelimit"
 	"github.com/Djunichi/APIGateway/internal/upstream"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var errNoAvailableUpstream = errors.New("no available upstream")
@@ -39,6 +40,16 @@ func HandlerWithFeatures(routes []config.Route, retry config.Retry, circuit conf
 	return handlerWithFeatures(routes, retry, circuit, rate, registry, verifiers, cacheConfig, cacheStore, logger, func(upstreams []*upstream.Target) (balancer.Balancer, error) {
 		return balancer.NewRoundRobin(upstreams)
 	})
+}
+
+func HandlerWithTelemetry(routes []config.Route, retry config.Retry, circuit config.CircuitBreaker,
+	rate config.RateLimit, registry *ratelimit.Registry, verifiers map[string]*auth.Verifier,
+	cacheConfig config.Cache, cacheStore cache.Store, logger *slog.Logger,
+	base http.RoundTripper, tracer trace.Tracer) (http.Handler, error) {
+	return handlerWithFeaturesAndTelemetry(routes, retry, circuit, rate, registry, verifiers,
+		cacheConfig, cacheStore, logger, func(upstreams []*upstream.Target) (balancer.Balancer, error) {
+			return balancer.NewRoundRobin(upstreams)
+		}, base, tracer)
 }
 
 func normalizedCircuitConfig(circuit config.CircuitBreaker) config.CircuitBreaker {
@@ -80,6 +91,16 @@ func handlerWithFeatures(
 	cacheConfig config.Cache, cacheStore cache.Store, logger *slog.Logger,
 	newBalancer balancer.Factory,
 ) (http.Handler, error) {
+	return handlerWithFeaturesAndTelemetry(routes, retry, circuit, rate, registry, verifiers,
+		cacheConfig, cacheStore, logger, newBalancer, http.DefaultTransport, nil)
+}
+
+func handlerWithFeaturesAndTelemetry(
+	routes []config.Route, retry config.Retry, circuit config.CircuitBreaker,
+	rate config.RateLimit, registry *ratelimit.Registry, verifiers map[string]*auth.Verifier,
+	cacheConfig config.Cache, cacheStore cache.Store, logger *slog.Logger,
+	newBalancer balancer.Factory, base http.RoundTripper, tracer trace.Tracer,
+) (http.Handler, error) {
 	if newBalancer == nil {
 		return nil, fmt.Errorf("balancer factory is required")
 	}
@@ -116,7 +137,7 @@ func handlerWithFeatures(
 			Rewrite: func(request *httputil.ProxyRequest) {
 				request.SetXForwarded()
 			},
-			Transport: newRetryTransport(http.DefaultTransport, routeBalancer, retry, circuit.FailureStatuses),
+			Transport: newRetryTransportWithTracing(base, routeBalancer, retry, circuit.FailureStatuses, tracer),
 		}
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			status := http.StatusBadGateway

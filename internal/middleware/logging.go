@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Djunichi/APIGateway/internal/metrics"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Logging records request details and updates the metrics collector.
@@ -17,7 +18,7 @@ func Logging(logger *slog.Logger, collector *metrics.Collector) Middleware {
 			next.ServeHTTP(recorder, r)
 			duration := time.Since(start)
 			collector.Observe(recorder.status, duration)
-			logger.Info(
+			attributes := []any{
 				"request completed",
 				"method", r.Method,
 				"path", r.URL.Path,
@@ -25,7 +26,12 @@ func Logging(logger *slog.Logger, collector *metrics.Collector) Middleware {
 				"bytes", recorder.bytes,
 				"duration_ms", duration.Milliseconds(),
 				"request_id", w.Header().Get(requestIDHeader),
-			)
+			}
+			spanContext := trace.SpanContextFromContext(r.Context())
+			if spanContext.IsValid() {
+				attributes = append(attributes, "trace_id", spanContext.TraceID().String(), "span_id", spanContext.SpanID().String())
+			}
+			logger.Info(attributes[0].(string), attributes[1:]...)
 		})
 	}
 }

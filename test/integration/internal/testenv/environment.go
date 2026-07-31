@@ -16,6 +16,7 @@ import (
 	"github.com/Djunichi/APIGateway/internal/config"
 	"github.com/Djunichi/APIGateway/internal/ratelimit"
 	"github.com/Djunichi/APIGateway/internal/server"
+	"github.com/Djunichi/APIGateway/internal/telemetry"
 )
 
 // Option configures an integration environment.
@@ -34,6 +35,12 @@ type settings struct {
 	cache        config.Cache
 	routeCache   config.RouteCache
 	cacheStore   cache.Store
+	telemetry    *telemetry.Runtime
+}
+
+// WithTelemetry installs a scenario-owned tracing runtime.
+func WithTelemetry(runtime *telemetry.Runtime) Option {
+	return func(settings *settings) { settings.telemetry = runtime }
 }
 
 // WithRateLimit configures rate limiting with a scenario-provided store.
@@ -188,6 +195,9 @@ func New(t testing.TB, options ...Option) *Environment {
 	}
 	if cfg.cacheStore != nil {
 		serverOptions = append(serverOptions, server.WithCacheStore(cfg.cacheStore))
+	}
+	if cfg.telemetry != nil {
+		serverOptions = append(serverOptions, server.WithTelemetry(cfg.telemetry))
 	}
 	gateway := server.New(gatewayConfig, slog.New(slog.NewTextHandler(io.Discard, nil)), serverOptions...)
 	go func() {

@@ -25,11 +25,14 @@ config ─────► middleware ─► metrics
 auth ───────► middleware
 cache ──────► middleware
 metrics ───────────────────► server
+telemetry ─────────────────► server
 ```
 
 - Keep dependencies acyclic.
 - `server` is the composition boundary and may depend on lower-level packages.
 - Lower-level packages must not import `server`.
+- OpenTelemetry providers and propagators are passed explicitly; do not mutate
+  process-global telemetry state.
 - Algorithms such as balancing must not depend on HTTP lifecycle or demo
   services.
 - Demo concepts such as Users and Billing must never enter `internal`.

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,68 @@ type Config struct {
 	RateLimit      RateLimit      `yaml:"rate_limit"`
 	Auth           Auth           `yaml:"auth"`
 	Cache          Cache          `yaml:"cache"`
+	Telemetry      Telemetry      `yaml:"telemetry"`
+}
+
+type Telemetry struct {
+	Tracing Tracing `yaml:"tracing"`
+}
+
+type Tracing struct {
+	Enabled         bool          `yaml:"enabled"`
+	ServiceName     string        `yaml:"service_name"`
+	Endpoint        string        `yaml:"endpoint"`
+	Insecure        bool          `yaml:"insecure"`
+	SampleRatio     float64       `yaml:"sample_ratio"`
+	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
+}
+
+func (t *Telemetry) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "tracing"); err != nil {
+		return err
+	}
+	type plain Telemetry
+	return value.Decode((*plain)(t))
+}
+
+func (t *Tracing) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "enabled", "service_name", "endpoint", "insecure", "sample_ratio", "shutdown_timeout"); err != nil {
+		return err
+	}
+	var v struct {
+		Enabled         *bool    `yaml:"enabled"`
+		ServiceName     string   `yaml:"service_name"`
+		Endpoint        string   `yaml:"endpoint"`
+		Insecure        *bool    `yaml:"insecure"`
+		SampleRatio     *float64 `yaml:"sample_ratio"`
+		ShutdownTimeout string   `yaml:"shutdown_timeout"`
+	}
+	if err := value.Decode(&v); err != nil {
+		return err
+	}
+	if v.Enabled != nil {
+		t.Enabled = *v.Enabled
+	}
+	if v.ServiceName != "" {
+		t.ServiceName = v.ServiceName
+	}
+	if v.Endpoint != "" {
+		t.Endpoint = v.Endpoint
+	}
+	if v.Insecure != nil {
+		t.Insecure = *v.Insecure
+	}
+	if v.SampleRatio != nil {
+		t.SampleRatio = *v.SampleRatio
+	}
+	if v.ShutdownTimeout != "" {
+		duration, err := time.ParseDuration(v.ShutdownTimeout)
+		if err != nil {
+			return fmt.Errorf("shutdown_timeout: %w", err)
+		}
+		t.ShutdownTimeout = duration
+	}
+	return nil
 }
 
 type HTTPServer struct {
@@ -206,10 +269,15 @@ func defaults() Config {
 		},
 		Cache: Cache{OnBackendError: "allow", OperationTimeout: 100 * time.Millisecond,
 			MaxBodyBytes: 1 << 20, Redis: Redis{Address: "localhost:6379", KeyPrefix: "gateway:cache"}},
+		Telemetry: Telemetry{Tracing: Tracing{ServiceName: "api-gateway", Endpoint: "localhost:4318",
+			Insecure: true, SampleRatio: 1, ShutdownTimeout: 5 * time.Second}},
 	}
 }
 
 func (c Config) Validate() error {
+	if err := c.validateTracing(); err != nil {
+		return err
+	}
 	if c.Server.Address == "" || c.Admin.Address == "" {
 		return errors.New("server and admin addresses are required")
 	}
@@ -291,6 +359,20 @@ func (c Config) Validate() error {
 			}
 			seenUpstreams[upstream.String()] = struct{}{}
 		}
+	}
+	return nil
+}
+
+func (c Config) validateTracing() error {
+	tracing := c.Telemetry.Tracing
+	if tracing.SampleRatio < 0 || tracing.SampleRatio > 1 {
+		return errors.New("telemetry tracing sample_ratio must be between 0 and 1")
+	}
+	if tracing.ShutdownTimeout <= 0 {
+		return errors.New("telemetry tracing shutdown_timeout must be positive")
+	}
+	if tracing.Enabled && (tracing.ServiceName == "" || tracing.Endpoint == "") {
+		return errors.New("enabled telemetry tracing requires service_name and endpoint")
 	}
 	return nil
 }
@@ -385,17 +467,51 @@ func applyEnvironment(c *Config) error {
 	setString("GATEWAY_ADMIN_ADDRESS", &c.Admin.Address)
 	setString("GATEWAY_LOG_LEVEL", &c.Log.Level)
 	setString("GATEWAY_LOG_FORMAT", &c.Log.Format)
+	setString("GATEWAY_TELEMETRY_TRACING_SERVICE_NAME", &c.Telemetry.Tracing.ServiceName)
+	setString("GATEWAY_TELEMETRY_TRACING_ENDPOINT", &c.Telemetry.Tracing.Endpoint)
+	if err := setBool("GATEWAY_TELEMETRY_TRACING_ENABLED", &c.Telemetry.Tracing.Enabled); err != nil {
+		return err
+	}
+	if err := setBool("GATEWAY_TELEMETRY_TRACING_INSECURE", &c.Telemetry.Tracing.Insecure); err != nil {
+		return err
+	}
+	if err := setFloat("GATEWAY_TELEMETRY_TRACING_SAMPLE_RATIO", &c.Telemetry.Tracing.SampleRatio); err != nil {
+		return err
+	}
 	durations := map[string]*time.Duration{
-		"GATEWAY_SERVER_READ_TIMEOUT":        &c.Server.ReadTimeout,
-		"GATEWAY_SERVER_WRITE_TIMEOUT":       &c.Server.WriteTimeout,
-		"GATEWAY_SERVER_IDLE_TIMEOUT":        &c.Server.IdleTimeout,
-		"GATEWAY_SERVER_SHUTDOWN_TIMEOUT":    &c.Server.ShutdownTimeout,
-		"GATEWAY_MIDDLEWARE_REQUEST_TIMEOUT": &c.Middleware.RequestTimeout,
+		"GATEWAY_SERVER_READ_TIMEOUT":                &c.Server.ReadTimeout,
+		"GATEWAY_SERVER_WRITE_TIMEOUT":               &c.Server.WriteTimeout,
+		"GATEWAY_SERVER_IDLE_TIMEOUT":                &c.Server.IdleTimeout,
+		"GATEWAY_SERVER_SHUTDOWN_TIMEOUT":            &c.Server.ShutdownTimeout,
+		"GATEWAY_MIDDLEWARE_REQUEST_TIMEOUT":         &c.Middleware.RequestTimeout,
+		"GATEWAY_TELEMETRY_TRACING_SHUTDOWN_TIMEOUT": &c.Telemetry.Tracing.ShutdownTimeout,
 	}
 	for key, target := range durations {
 		if err := setDuration(key, target); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func setBool(key string, target *bool) error {
+	if value, ok := os.LookupEnv(key); ok {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		*target = parsed
+	}
+	return nil
+}
+
+func setFloat(key string, target *float64) error {
+	if value, ok := os.LookupEnv(key); ok {
+		parsed, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		*target = parsed
 	}
 	return nil
 }

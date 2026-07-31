@@ -10,9 +10,10 @@ import (
 
 // RecordedRequest is a request observed by a test upstream.
 type RecordedRequest struct {
-	Method    string
-	Path      string
-	RequestID string
+	Method      string
+	Path        string
+	RequestID   string
+	Traceparent string
 }
 
 type upstream struct {
@@ -44,9 +45,10 @@ func (u *upstream) URL() string {
 
 func (u *upstream) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	request := RecordedRequest{
-		Method:    r.Method,
-		Path:      r.URL.Path,
-		RequestID: r.Header.Get("X-Request-ID"),
+		Method:      r.Method,
+		Path:        r.URL.Path,
+		RequestID:   r.Header.Get("X-Request-ID"),
+		Traceparent: r.Header.Get("traceparent"),
 	}
 	u.mu.Lock()
 	u.requests = append(u.requests, request)
@@ -60,8 +62,9 @@ func (u *upstream) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(upstreamPayload{
-		Service:   u.service,
-		Path:      request.Path,
-		RequestID: request.RequestID,
+		Service:     u.service,
+		Path:        request.Path,
+		RequestID:   request.RequestID,
+		Traceparent: request.Traceparent,
 	})
 }

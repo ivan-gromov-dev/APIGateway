@@ -3,13 +3,25 @@ package testenv
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 )
 
 type upstreamPayload struct {
-	Service   string `json:"service"`
-	Path      string `json:"path"`
-	RequestID string `json:"request_id"`
+	Service     string `json:"service"`
+	Path        string `json:"path"`
+	RequestID   string `json:"request_id"`
+	Traceparent string `json:"traceparent"`
+}
+
+// RequireTraceID fails unless the upstream received the expected W3C trace ID.
+func (r *Response) RequireTraceID(expected string) *Response {
+	r.t.Helper()
+	parts := strings.Split(r.payload.Traceparent, "-")
+	if len(parts) != 4 || parts[1] != expected {
+		r.t.Fatalf("upstream traceparent = %q, want trace ID %q", r.payload.Traceparent, expected)
+	}
+	return r
 }
 
 // Response wraps an HTTP response with scenario-focused assertions.

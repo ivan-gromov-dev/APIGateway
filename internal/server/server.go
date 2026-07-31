@@ -11,6 +11,7 @@ import (
 	"net/http/pprof"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/Djunichi/APIGateway/internal/auth"
 	"github.com/Djunichi/APIGateway/internal/cache"
@@ -21,6 +22,7 @@ import (
 	"github.com/Djunichi/APIGateway/internal/proxy"
 	"github.com/Djunichi/APIGateway/internal/ratelimit"
 	redisstore "github.com/Djunichi/APIGateway/internal/ratestore/redis"
+	"github.com/Djunichi/APIGateway/internal/telemetry"
 )
 
 type Server struct {
@@ -29,6 +31,7 @@ type Server struct {
 	ready        atomic.Bool
 	rateRegistry *ratelimit.Registry
 	cacheStore   cache.Store
+	telemetry    *telemetry.Runtime
 }
 
 type Option func(*Server)
@@ -41,6 +44,10 @@ func WithCacheStore(store cache.Store) Option {
 	return func(server *Server) { server.cacheStore = store }
 }
 
+func WithTelemetry(runtime *telemetry.Runtime) Option {
+	return func(server *Server) { server.telemetry = runtime }
+}
+
 func New(cfg config.Config, logger *slog.Logger, options ...Option) *Server {
 	server := &Server{cfg: cfg, logger: logger}
 	for _, option := range options {
@@ -49,14 +56,25 @@ func New(cfg config.Config, logger *slog.Logger, options ...Option) *Server {
 	return server
 }
 
-func (s *Server) Run(ctx context.Context) error {
+func (s *Server) Run(ctx context.Context) (resultErr error) {
+	runtime, owned, err := s.prepareTelemetry(ctx)
+	if err != nil {
+		return err
+	}
+	if owned {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.Telemetry.Tracing.ShutdownTimeout)
+			defer cancel()
+			resultErr = errors.Join(resultErr, runtime.Shutdown(shutdownCtx))
+		}()
+	}
 	collector := &metrics.Collector{}
 	registry, closeRateLimit, err := s.prepareRateLimit(ctx)
 	if err != nil {
 		return err
 	}
 	defer closeRateLimit()
-	verifiers, err := s.prepareAuth(ctx)
+	verifiers, err := s.prepareAuthWithClient(ctx, runtime.HTTPClient)
 	if err != nil {
 		return err
 	}
@@ -65,8 +83,9 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 	defer closeCache()
-	proxyHandler, err := proxy.HandlerWithFeatures(s.cfg.Routes, s.cfg.Retry, s.cfg.CircuitBreaker,
-		s.cfg.RateLimit, registry, verifiers, s.cfg.Cache, cacheStore, s.logger)
+	proxyHandler, err := proxy.HandlerWithTelemetry(s.cfg.Routes, s.cfg.Retry, s.cfg.CircuitBreaker,
+		s.cfg.RateLimit, registry, verifiers, s.cfg.Cache, cacheStore, s.logger,
+		runtime.Transport(http.DefaultTransport), runtime.Tracer())
 	if err != nil {
 		return err
 	}
@@ -83,6 +102,7 @@ func (s *Server) Run(ctx context.Context) error {
 		middleware.CORS(s.cfg.Middleware.CORS),
 		globalRateLimit,
 	)
+	handler = runtime.Handler(handler)
 
 	app := httpServer(s.cfg.Server, handler)
 	admin := httpServer(s.cfg.Admin, adminHandler(collector, &s.ready))
@@ -125,12 +145,30 @@ func (s *Server) Run(ctx context.Context) error {
 	return errors.Join(runErr, shutdownErr)
 }
 
+func (s *Server) prepareTelemetry(ctx context.Context) (*telemetry.Runtime, bool, error) {
+	if s.telemetry != nil {
+		return s.telemetry, false, nil
+	}
+	cfg := s.cfg.Telemetry.Tracing
+	runtime, err := telemetry.New(ctx, telemetry.Config{Enabled: cfg.Enabled, ServiceName: cfg.ServiceName,
+		Endpoint: cfg.Endpoint, Insecure: cfg.Insecure, SampleRatio: cfg.SampleRatio})
+	if err != nil {
+		return nil, false, fmt.Errorf("prepare telemetry: %w", err)
+	}
+	return runtime, true, nil
+}
+
 func (s *Server) prepareAuth(ctx context.Context) (map[string]*auth.Verifier, error) {
+	return s.prepareAuthWithClient(ctx, func(timeout time.Duration) *http.Client { return &http.Client{Timeout: timeout} })
+}
+
+func (s *Server) prepareAuthWithClient(ctx context.Context, client func(time.Duration) *http.Client) (map[string]*auth.Verifier, error) {
 	result := make(map[string]*auth.Verifier, len(s.cfg.Auth.Providers))
 	for name, provider := range s.cfg.Auth.Providers {
 		verifier, err := auth.New(ctx, auth.Config{
 			JWKSURL: provider.JWKSURL, Issuer: provider.Issuer, Audience: provider.Audience,
 			Algorithms: provider.Algorithms, ClockSkew: provider.ClockSkew, HTTPTimeout: provider.HTTPTimeout,
+			HTTPClient: client(provider.HTTPTimeout),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("prepare auth provider %q: %w", name, err)
