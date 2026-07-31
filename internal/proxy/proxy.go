@@ -16,6 +16,7 @@ import (
 	"github.com/Djunichi/APIGateway/internal/cache"
 	"github.com/Djunichi/APIGateway/internal/circuitbreaker"
 	"github.com/Djunichi/APIGateway/internal/config"
+	"github.com/Djunichi/APIGateway/internal/metrics"
 	"github.com/Djunichi/APIGateway/internal/middleware"
 	"github.com/Djunichi/APIGateway/internal/ratelimit"
 	"github.com/Djunichi/APIGateway/internal/upstream"
@@ -50,6 +51,16 @@ func HandlerWithTelemetry(routes []config.Route, retry config.Retry, circuit con
 		cacheConfig, cacheStore, logger, func(upstreams []*upstream.Target) (balancer.Balancer, error) {
 			return balancer.NewRoundRobin(upstreams)
 		}, base, tracer)
+}
+
+func HandlerWithObservability(routes []config.Route, retry config.Retry, circuit config.CircuitBreaker,
+	rate config.RateLimit, registry *ratelimit.Registry, verifiers map[string]*auth.Verifier,
+	cacheConfig config.Cache, cacheStore cache.Store, logger *slog.Logger,
+	base http.RoundTripper, tracer trace.Tracer, collector *metrics.Collector) (http.Handler, error) {
+	return handlerWithFeaturesAndObservability(routes, retry, circuit, rate, registry, verifiers,
+		cacheConfig, cacheStore, logger, func(upstreams []*upstream.Target) (balancer.Balancer, error) {
+			return balancer.NewRoundRobin(upstreams)
+		}, base, tracer, collector)
 }
 
 func normalizedCircuitConfig(circuit config.CircuitBreaker) config.CircuitBreaker {
@@ -101,6 +112,16 @@ func handlerWithFeaturesAndTelemetry(
 	cacheConfig config.Cache, cacheStore cache.Store, logger *slog.Logger,
 	newBalancer balancer.Factory, base http.RoundTripper, tracer trace.Tracer,
 ) (http.Handler, error) {
+	return handlerWithFeaturesAndObservability(routes, retry, circuit, rate, registry, verifiers,
+		cacheConfig, cacheStore, logger, newBalancer, base, tracer, nil)
+}
+
+func handlerWithFeaturesAndObservability(
+	routes []config.Route, retry config.Retry, circuit config.CircuitBreaker,
+	rate config.RateLimit, registry *ratelimit.Registry, verifiers map[string]*auth.Verifier,
+	cacheConfig config.Cache, cacheStore cache.Store, logger *slog.Logger,
+	newBalancer balancer.Factory, base http.RoundTripper, tracer trace.Tracer, collector *metrics.Collector,
+) (http.Handler, error) {
 	if newBalancer == nil {
 		return nil, fmt.Errorf("balancer factory is required")
 	}
@@ -137,7 +158,7 @@ func handlerWithFeaturesAndTelemetry(
 			Rewrite: func(request *httputil.ProxyRequest) {
 				request.SetXForwarded()
 			},
-			Transport: newRetryTransportWithTracing(base, routeBalancer, retry, circuit.FailureStatuses, tracer),
+			Transport: newRetryTransportWithObservability(base, routeBalancer, retry, circuit.FailureStatuses, tracer, collector, route.PathPrefix),
 		}
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			status := http.StatusBadGateway
@@ -155,10 +176,10 @@ func handlerWithFeaturesAndTelemetry(
 			if cacheStore == nil {
 				return nil, fmt.Errorf("cache store is required for route %q", route.PathPrefix)
 			}
-			handler = middleware.ResponseCache(cacheStore, cacheConfig, route.Cache, route.PathPrefix)(handler)
+			handler = middleware.ResponseCacheWithMetrics(cacheStore, cacheConfig, route.Cache, route.PathPrefix, collector)(handler)
 		}
 		if rate.Enabled && len(route.RateLimits) > 0 {
-			rateMiddleware, err := middleware.BuildRateLimit(route.RateLimits, rate, registry)
+			rateMiddleware, err := middleware.BuildRateLimitWithMetrics(route.RateLimits, rate, registry, collector, route.PathPrefix)
 			if err != nil {
 				return nil, fmt.Errorf("build rate limit for route %q: %w", route.PathPrefix, err)
 			}
@@ -169,8 +190,9 @@ func handlerWithFeaturesAndTelemetry(
 			if verifier == nil {
 				return nil, fmt.Errorf("auth provider %q is unavailable", route.Auth.Provider)
 			}
-			handler = middleware.Authentication(verifier, route.Auth.RequiredScopes)(handler)
+			handler = middleware.AuthenticationWithMetrics(verifier, route.Auth.RequiredScopes, collector, route.PathPrefix)(handler)
 		}
+		handler = middleware.RouteMetrics(collector, route.PathPrefix)(handler)
 		mux.Handle(route.PathPrefix, handler)
 	}
 	return mux, nil

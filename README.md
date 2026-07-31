@@ -14,7 +14,8 @@ operational endpoints, graceful shutdown, and real-network integration testing.
 - Graceful shutdown with readiness state transitions
 - Structured logging with `log/slog`
 - Request ID propagation, panic recovery, request logging, timeout, and CORS
-- Prometheus-compatible metrics and Go `pprof`
+- Prometheus metrics for HTTP RED signals, routes, upstream attempts, retries,
+  authentication, caching, rate limiting, Go runtime and process state; plus `pprof`
 - OpenTelemetry traces with W3C context propagation and OTLP export
 - Unit tests, real-network integration tests, and load-test scenarios
 - Retries across upstreams for safe, replayable requests
@@ -192,14 +193,20 @@ instrumented backend continue the same trace. Structured request logs include
 `trace_id` and `span_id`; Prometheus metrics and `pprof` remain independent.
 
 The gateway exports OTLP/HTTP to an OpenTelemetry Collector rather than
-directly to a vendor backend. Start the demo Collector and Tempo backend with:
+directly to a vendor backend. The optional complete observability stack routes
+traces through the Collector to Elastic APM, JSON container logs through
+Filebeat to Elasticsearch/Kibana, and metrics through Prometheus to Grafana.
+Start it with:
 
 ```powershell
 docker compose -f docker-compose.yml -f deployments/observability/docker-compose.yml up --build
 ```
 
-Tempo's API is exposed at `http://localhost:3200`. A visualization layer such
-as Grafana can be connected later without changing gateway instrumentation.
+Open Grafana at `http://localhost:3000` (`admin` / `admin`) for the provisioned
+API Gateway dashboard, Prometheus at `http://localhost:9091`, and Kibana at
+`http://localhost:5601` for logs and APM traces. See the
+[observability guide](deployments/observability/README.md) for endpoints,
+resource requirements, and security limitations.
 
 ```yaml
 telemetry:
@@ -248,6 +255,11 @@ The administrative server listens on `:9090` by default:
 | `GET /readyz`       | Readiness; returns `503` before startup and during shutdown |
 | `GET /metrics`      | Prometheus-compatible gateway metrics                       |
 | `GET /debug/pprof/` | Go runtime profiler                                         |
+
+Metrics use only bounded labels from HTTP methods/statuses and configured
+routes, upstreams, and rule names. Raw paths, request IDs, users, and tokens are
+never metric labels. Histograms support p50/p95/p99 latency dashboards without
+calculating quantiles inside the gateway.
 
 The gateway reports ready only after both public and admin listeners have been
 opened successfully. It becomes unready before graceful shutdown begins.

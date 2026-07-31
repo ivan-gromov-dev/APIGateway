@@ -13,6 +13,7 @@ import (
 	"github.com/Djunichi/APIGateway/internal/balancer"
 	"github.com/Djunichi/APIGateway/internal/circuitbreaker"
 	"github.com/Djunichi/APIGateway/internal/config"
+	"github.com/Djunichi/APIGateway/internal/metrics"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -25,6 +26,8 @@ type retryTransport struct {
 	statuses        map[int]struct{}
 	failureStatuses map[int]struct{}
 	tracer          trace.Tracer
+	collector       *metrics.Collector
+	route           string
 }
 
 func newRetryTransport(base http.RoundTripper, upstreams balancer.Balancer, policy config.Retry, failureStatuses []int) http.RoundTripper {
@@ -32,6 +35,10 @@ func newRetryTransport(base http.RoundTripper, upstreams balancer.Balancer, poli
 }
 
 func newRetryTransportWithTracing(base http.RoundTripper, upstreams balancer.Balancer, policy config.Retry, failureStatuses []int, tracer trace.Tracer) http.RoundTripper {
+	return newRetryTransportWithObservability(base, upstreams, policy, failureStatuses, tracer, nil, "")
+}
+
+func newRetryTransportWithObservability(base http.RoundTripper, upstreams balancer.Balancer, policy config.Retry, failureStatuses []int, tracer trace.Tracer, collector *metrics.Collector, route string) http.RoundTripper {
 	if policy.MaxAttempts < 1 {
 		policy.MaxAttempts = 1
 	}
@@ -48,7 +55,7 @@ func newRetryTransportWithTracing(base http.RoundTripper, upstreams balancer.Bal
 	}
 	return &retryTransport{
 		base: base, balancer: upstreams, policy: policy,
-		statuses: statuses, failureStatuses: passiveStatuses, tracer: tracer,
+		statuses: statuses, failureStatuses: passiveStatuses, tracer: tracer, collector: collector, route: route,
 	}
 }
 
@@ -57,14 +64,21 @@ func (t *retryTransport) RoundTrip(request *http.Request) (*http.Response, error
 	if retryableRequest(request) {
 		attempts = t.policy.MaxAttempts
 	}
+	retryReason := ""
 	for attempt := 0; attempt < attempts; attempt++ {
 		if attempt > 0 {
+			if t.collector != nil {
+				t.collector.ObserveRetry(t.route, retryReason)
+			}
 			if err := waitForRetry(request.Context(), t.policy.Backoff); err != nil {
 				return nil, err
 			}
 		}
 		attemptRequest, cancel, done, err := t.attemptRequest(request, attempt)
 		if err != nil {
+			if t.collector != nil {
+				t.collector.ObserveProxyAttempt(t.route, "none", "unavailable", 0)
+			}
 			return nil, err
 		}
 		var span trace.Span
@@ -74,9 +88,18 @@ func (t *retryTransport) RoundTrip(request *http.Request) (*http.Response, error
 			attemptRequest = attemptRequest.WithContext(ctx)
 			span = started
 		}
+		startedAt := time.Now()
 		response, err := t.base.RoundTrip(attemptRequest)
 		completedAt := time.Now()
+		duration := completedAt.Sub(startedAt)
 		if err != nil {
+			if t.collector != nil {
+				outcome := "transport_error"
+				if request.Context().Err() != nil {
+					outcome = "neutral"
+				}
+				t.collector.ObserveProxyAttempt(t.route, attemptRequest.URL.Host, outcome, duration)
+			}
 			if span != nil {
 				span.RecordError(err)
 				span.SetStatus(codes.Error, "transport failure")
@@ -91,7 +114,15 @@ func (t *retryTransport) RoundTrip(request *http.Request) (*http.Response, error
 			if attempt+1 == attempts || request.Context().Err() != nil {
 				return nil, err
 			}
+			retryReason = "transport_error"
 			continue
+		}
+		if t.collector != nil {
+			outcome := "success"
+			if _, failed := t.failureStatuses[response.StatusCode]; failed {
+				outcome = "failure"
+			}
+			t.collector.ObserveProxyAttempt(t.route, attemptRequest.URL.Host, outcome, duration)
 		}
 		if _, failed := t.failureStatuses[response.StatusCode]; failed {
 			done(circuitbreaker.OutcomeFailure, completedAt)
@@ -114,6 +145,7 @@ func (t *retryTransport) RoundTrip(request *http.Request) (*http.Response, error
 		}
 		_, _ = io.CopyN(io.Discard, response.Body, 32<<10)
 		_ = response.Body.Close()
+		retryReason = "status"
 	}
 	panic("unreachable")
 }

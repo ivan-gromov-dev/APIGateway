@@ -13,11 +13,12 @@ import (
 func Logging(logger *slog.Logger, collector *metrics.Collector) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			collector.BeginRequest()
 			start := time.Now()
 			recorder := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(recorder, r)
 			duration := time.Since(start)
-			collector.Observe(recorder.status, duration)
+			collector.Observe(r.Method, recorder.status, recorder.bytes, duration)
 			attributes := []any{
 				"request completed",
 				"method", r.Method,

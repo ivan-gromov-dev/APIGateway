@@ -58,6 +58,9 @@ Changing middleware order changes observable behaviour. Update middleware and
 integration tests when modifying the chain. Ensure request logging and metrics
 observe intended timeout, recovery, and CORS responses.
 
+Request ID and logging wrap recovery so recovered panics retain correlation and
+are counted as completed HTTP 500 responses rather than leaking the in-flight gauge.
+
 ## Tests
 
 Cover listener failures independently, readiness states, admin endpoints,

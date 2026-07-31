@@ -83,21 +83,21 @@ func (s *Server) Run(ctx context.Context) (resultErr error) {
 		return err
 	}
 	defer closeCache()
-	proxyHandler, err := proxy.HandlerWithTelemetry(s.cfg.Routes, s.cfg.Retry, s.cfg.CircuitBreaker,
+	proxyHandler, err := proxy.HandlerWithObservability(s.cfg.Routes, s.cfg.Retry, s.cfg.CircuitBreaker,
 		s.cfg.RateLimit, registry, verifiers, s.cfg.Cache, cacheStore, s.logger,
-		runtime.Transport(http.DefaultTransport), runtime.Tracer())
+		runtime.Transport(http.DefaultTransport), runtime.Tracer(), collector)
 	if err != nil {
 		return err
 	}
-	globalRateLimit, err := middleware.BuildRateLimit(s.cfg.RateLimit.Rules, s.cfg.RateLimit, registry)
+	globalRateLimit, err := middleware.BuildRateLimitWithMetrics(s.cfg.RateLimit.Rules, s.cfg.RateLimit, registry, collector, "global")
 	if err != nil {
 		return fmt.Errorf("build global rate limit: %w", err)
 	}
 	handler := middleware.Chain(
 		proxyHandler,
-		middleware.Recovery(s.logger),
 		middleware.RequestID,
 		middleware.Logging(s.logger, collector),
+		middleware.Recovery(s.logger),
 		middleware.Timeout(s.cfg.Middleware.RequestTimeout),
 		middleware.CORS(s.cfg.Middleware.CORS),
 		globalRateLimit,

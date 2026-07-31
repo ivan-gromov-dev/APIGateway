@@ -1,0 +1,27 @@
+filebeat.inputs:
+  - type: filestream
+    id: docker-containers
+    prospector.scanner.symlinks: true
+    paths:
+      - /var/lib/docker/containers/*/*.log
+    parsers:
+      - container:
+          stream: all
+          format: docker
+    processors:
+      - add_docker_metadata:
+          host: unix:///var/run/docker.sock
+      - decode_json_fields:
+          fields: [message]
+          target: ""
+          overwrite_keys: true
+          add_error_key: true
+
+output.elasticsearch:
+  hosts: [http://elasticsearch:9200]
+
+setup.kibana:
+  host: http://kibana:5601
+
+setup.dashboards.enabled: true
+logging.level: info

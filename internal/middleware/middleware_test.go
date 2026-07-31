@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -110,8 +111,23 @@ func TestLoggingRecordsResponseAndMetrics(t *testing.T) {
 	}
 	metricsResponse := httptest.NewRecorder()
 	collector.ServeHTTP(metricsResponse, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if !strings.Contains(metricsResponse.Body.String(), "gateway_http_requests_total 1") {
+	if !strings.Contains(metricsResponse.Body.String(), `gateway_http_requests_total{method="POST",status_code="201"} 1`) {
 		t.Fatalf("request metric was not recorded: %q", metricsResponse.Body.String())
+	}
+}
+
+func TestLoggingCountsRecoveredPanic(t *testing.T) {
+	collector := &metrics.Collector{}
+	handler := Chain(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") }),
+		RequestID, Logging(slog.New(slog.NewTextHandler(io.Discard, nil)), collector),
+		Recovery(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/panic", nil))
+	metricsResponse := httptest.NewRecorder()
+	collector.ServeHTTP(metricsResponse, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if response.Code != http.StatusInternalServerError ||
+		!strings.Contains(metricsResponse.Body.String(), `gateway_http_requests_total{method="GET",status_code="500"} 1`) {
+		t.Fatalf("panic response=%d metrics=%s", response.Code, metricsResponse.Body.String())
 	}
 }
 

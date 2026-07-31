@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Djunichi/APIGateway/internal/auth"
+	"github.com/Djunichi/APIGateway/internal/metrics"
 )
 
 type Authenticator interface {
@@ -21,27 +22,35 @@ func Principal(r *http.Request) (auth.Principal, bool) {
 }
 
 func Authentication(verifier Authenticator, requiredScopes []string) Middleware {
+	return AuthenticationWithMetrics(verifier, requiredScopes, nil, "")
+}
+
+func AuthenticationWithMetrics(verifier Authenticator, requiredScopes []string, collector *metrics.Collector, route string) Middleware {
 	scopes := append([]string(nil), requiredScopes...)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw, ok := bearerToken(r.Header.Get("Authorization"))
 			if !ok {
+				observeFeature(collector, "auth", route, "", "missing_token")
 				writeAuthError(w, http.StatusUnauthorized, "invalid_token", "Bearer")
 				return
 			}
 			principal, err := verifier.Verify(r.Context(), raw)
 			if err != nil {
+				observeFeature(collector, "auth", route, "", "invalid_token")
 				writeAuthError(w, http.StatusUnauthorized, "invalid_token", `Bearer error="invalid_token"`)
 				return
 			}
 			for _, scope := range scopes {
 				if !principal.HasScope(scope) {
+					observeFeature(collector, "auth", route, "", "insufficient_scope")
 					writeAuthError(w, http.StatusForbidden, "insufficient_scope", `Bearer error="insufficient_scope"`)
 					return
 				}
 			}
 			r.Header.Del("X-Authenticated-Subject")
 			r.Header.Set("X-Authenticated-Subject", principal.Subject)
+			observeFeature(collector, "auth", route, "", "success")
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, principal)))
 		})
 	}

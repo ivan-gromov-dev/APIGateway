@@ -54,6 +54,8 @@ changes.
 - `test/integration` contains real-network behavioral scenarios.
 - `test/load` contains manual performance scenarios and local result files.
 - `scripts` contains the cross-platform verification harness.
+- `deployments/observability` contains the optional local Prometheus, Grafana,
+  Elastic, Filebeat, APM Server, and OpenTelemetry Collector stack.
 
 The public server handles proxied traffic. Health, readiness, metrics, and
 `pprof` belong on the admin server.

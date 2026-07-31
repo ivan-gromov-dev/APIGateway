@@ -9,25 +9,29 @@ import (
 	"time"
 )
 
-func TestCollectorObserveAndServeHTTP(t *testing.T) {
+func TestCollectorExposesGatewayMetrics(t *testing.T) {
 	collector := &Collector{}
-	collector.Observe(http.StatusOK, 50*time.Millisecond)
-	collector.Observe(http.StatusBadGateway, 100*time.Millisecond)
+	collector.BeginRequest()
+	collector.Observe(http.MethodGet, http.StatusBadGateway, 512, 100*time.Millisecond)
+	collector.ObserveRoute("/api/", http.StatusBadGateway)
+	collector.ObserveProxyAttempt("/api/", "backend-1:8081", "failure", 50*time.Millisecond)
+	collector.ObserveRetry("/api/", "status")
+	collector.ObserveFeature("cache", "/api/", "", "hit")
 
 	response := httptest.NewRecorder()
 	collector.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-
-	if contentType := response.Header().Get("Content-Type"); contentType != "text/plain; version=0.0.4" {
-		t.Fatalf("Content-Type = %q", contentType)
-	}
 	body := response.Body.String()
 	for _, metric := range []string{
-		"gateway_http_requests_total 2",
-		"gateway_http_errors_total 1",
-		"gateway_http_request_duration_seconds_sum 0.150000",
+		`gateway_http_requests_total{method="GET",status_code="502"} 1`,
+		`gateway_route_requests_total{route="/api/",status_code="502"} 1`,
+		`gateway_proxy_attempts_total{outcome="failure",route="/api/",upstream="backend-1:8081"} 1`,
+		`gateway_proxy_retries_total{reason="status",route="/api/"} 1`,
+		`gateway_feature_decisions_total{feature="cache",name="",result="hit",scope="/api/"} 1`,
+		`gateway_http_requests_in_flight 0`,
+		`go_goroutines`, `process_cpu_seconds_total`,
 	} {
 		if !strings.Contains(body, metric) {
-			t.Errorf("metrics output does not contain %q:\n%s", metric, body)
+			t.Errorf("output does not contain %q", metric)
 		}
 	}
 }
@@ -35,20 +39,19 @@ func TestCollectorObserveAndServeHTTP(t *testing.T) {
 func TestCollectorIsSafeForConcurrentUse(t *testing.T) {
 	collector := &Collector{}
 	const observations = 100
-	var waitGroup sync.WaitGroup
-	waitGroup.Add(observations)
-
+	var group sync.WaitGroup
+	group.Add(observations)
 	for range observations {
 		go func() {
-			defer waitGroup.Done()
-			collector.Observe(http.StatusNoContent, time.Millisecond)
+			defer group.Done()
+			collector.BeginRequest()
+			collector.Observe("GET", 204, 0, time.Millisecond)
 		}()
 	}
-	waitGroup.Wait()
-
+	group.Wait()
 	response := httptest.NewRecorder()
 	collector.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if !strings.Contains(response.Body.String(), "gateway_http_requests_total 100") {
-		t.Fatalf("unexpected metrics output:\n%s", response.Body.String())
+	if !strings.Contains(response.Body.String(), `gateway_http_requests_total{method="GET",status_code="204"} 100`) {
+		t.Fatal("concurrent observations were lost")
 	}
 }

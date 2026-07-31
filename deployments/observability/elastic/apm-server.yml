@@ -1,0 +1,13 @@
+apm-server:
+  host: 0.0.0.0:8200
+  auth:
+    anonymous:
+      enabled: true
+
+output.elasticsearch:
+  hosts: [http://elasticsearch:9200]
+
+setup.kibana:
+  host: http://kibana:5601
+
+logging.level: info
