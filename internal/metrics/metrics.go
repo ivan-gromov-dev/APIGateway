@@ -26,6 +26,8 @@ type Collector struct {
 	proxyDuration    *prometheus.HistogramVec
 	retries          *prometheus.CounterVec
 	featureDecisions *prometheus.CounterVec
+	grpcRequests     *prometheus.CounterVec
+	grpcDuration     *prometheus.HistogramVec
 }
 
 func (c *Collector) init() {
@@ -40,11 +42,23 @@ func (c *Collector) init() {
 		c.proxyDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "gateway_proxy_attempt_duration_seconds", Help: "Proxy attempt duration.", Buckets: prometheus.DefBuckets}, []string{"route", "upstream"})
 		c.retries = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "gateway_proxy_retries_total", Help: "Additional proxy attempts by configured route and reason."}, []string{"route", "reason"})
 		c.featureDecisions = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "gateway_feature_decisions_total", Help: "Authentication, cache, and rate-limit decisions."}, []string{"feature", "scope", "name", "result"})
+		c.grpcRequests = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "gateway_grpc_requests_total", Help: "Completed gRPC calls by configured route and gRPC status."}, []string{"route", "grpc_status"})
+		c.grpcDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "gateway_grpc_request_duration_seconds", Help: "gRPC call duration.", Buckets: prometheus.DefBuckets}, []string{"route"})
 		c.registry.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 			c.httpRequests, c.httpDuration, c.httpSize, c.inFlight, c.routeRequests,
-			c.proxyAttempts, c.proxyDuration, c.retries, c.featureDecisions)
+			c.proxyAttempts, c.proxyDuration, c.retries, c.featureDecisions, c.grpcRequests, c.grpcDuration)
 		c.handler = promhttp.HandlerFor(c.registry, promhttp.HandlerOpts{})
 	})
+}
+
+// ObserveGRPC records one completed call using only its configured route label.
+func (c *Collector) ObserveGRPC(route, status string, duration time.Duration) {
+	c.init()
+	if status == "" {
+		status = "unknown"
+	}
+	c.grpcRequests.WithLabelValues(route, status).Inc()
+	c.grpcDuration.WithLabelValues(route).Observe(duration.Seconds())
 }
 
 // BeginRequest increments the current public-request gauge.

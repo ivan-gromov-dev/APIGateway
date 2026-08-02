@@ -20,6 +20,7 @@ import (
 	"github.com/Djunichi/APIGateway/internal/metrics"
 	"github.com/Djunichi/APIGateway/internal/ratelimit"
 	"github.com/Djunichi/APIGateway/internal/telemetry"
+	"github.com/Djunichi/APIGateway/internal/upstream"
 )
 
 func TestReadinessHandlerReflectsState(t *testing.T) {
@@ -45,6 +46,46 @@ func TestOkHandler(t *testing.T) {
 	ok(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d", response.Code)
+	}
+}
+
+func TestPublicHTTPServerUsesStreamingSafeTimeoutsForGRPC(t *testing.T) {
+	cfg := testConfig(":1", ":2", "http://localhost")
+	plain := publicHTTPServer(cfg, http.NotFoundHandler())
+	if plain.ReadTimeout == 0 || plain.WriteTimeout == 0 {
+		t.Fatal("HTTP-only listener unexpectedly disabled timeouts")
+	}
+	cfg.GRPC.Enabled = true
+	grpcServer := publicHTTPServer(cfg, http.NotFoundHandler())
+	if grpcServer.ReadTimeout != 0 || grpcServer.WriteTimeout != 0 {
+		t.Fatalf("gRPC listener timeouts read=%s write=%s", grpcServer.ReadTimeout, grpcServer.WriteTimeout)
+	}
+}
+
+func TestBuildHandlerDispatchesGRPCSeparatelyFromHTTPPolicy(t *testing.T) {
+	httpUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	defer httpUpstream.Close()
+	cfg := testConfig(":1", ":2", httpUpstream.URL)
+	cfg.GRPC = config.GRPC{Enabled: true, Routes: []config.GRPCRoute{{PathPrefix: "/echo.Echo/", Upstream: "http://127.0.0.1:1"}}}
+	gateway := New(cfg, discardLogger())
+	gateway.runtime = &runtimeState{telemetry: telemetry.Disabled(), registry: ratelimit.NewRegistry(), collector: &metrics.Collector{}}
+	var targets []*upstream.Target
+	handler, err := gateway.buildHandler(cfg, telemetry.Disabled(), nil, &targets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpResponse := httptest.NewRecorder()
+	handler.ServeHTTP(httpResponse, httptest.NewRequest(http.MethodGet, "/api/", nil))
+	if httpResponse.Code != http.StatusNoContent {
+		t.Fatalf("HTTP status=%d", httpResponse.Code)
+	}
+	grpcRequest := httptest.NewRequest(http.MethodPost, "/echo.Echo/Call", nil)
+	grpcRequest.ProtoMajor = 2
+	grpcRequest.Header.Set("Content-Type", "application/grpc")
+	grpcResponse := httptest.NewRecorder()
+	handler.ServeHTTP(grpcResponse, grpcRequest)
+	if grpcResponse.Header().Get("Grpc-Status") != "14" {
+		t.Fatalf("gRPC status=%q", grpcResponse.Header().Get("Grpc-Status"))
 	}
 }
 

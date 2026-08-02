@@ -46,7 +46,11 @@ type settings struct {
 	rollout      config.Rollout
 	discovery    bool
 	telemetry    *telemetry.Runtime
+	grpc         config.GRPC
 }
+
+// WithGRPC enables transparent gRPC routes on the public listener.
+func WithGRPC(cfg config.GRPC) Option { return func(settings *settings) { settings.grpc = cfg } }
 
 // WithTelemetry installs a scenario-owned tracing runtime.
 func WithTelemetry(runtime *telemetry.Runtime) Option {
@@ -148,7 +152,7 @@ func New(t testing.TB, options ...Option) *Environment {
 	if cfg.users < 0 {
 		t.Fatal("users-service instance count must not be negative")
 	}
-	if cfg.users == 0 && !cfg.billing {
+	if cfg.users == 0 && !cfg.billing && (!cfg.grpc.Enabled || len(cfg.grpc.Routes) == 0) {
 		t.Fatal("at least one upstream service is required")
 	}
 
@@ -220,6 +224,7 @@ func New(t testing.TB, options ...Option) *Environment {
 		Cache:             cfg.cache,
 		Routes:            routes,
 		ActiveHealthCheck: cfg.activeHealth,
+		GRPC:              cfg.grpc,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -260,6 +265,9 @@ func New(t testing.TB, options ...Option) *Environment {
 	environment.waitForReady()
 	return environment
 }
+
+// PublicAddress returns the gateway public listener address for protocol clients.
+func (e *Environment) PublicAddress() string { return strings.TrimPrefix(e.publicBaseURL, "http://") }
 
 // SetUserHealthStatus changes the status returned by a users upstream's /healthz endpoint.
 func (e *Environment) SetUserHealthStatus(instance, status int) {

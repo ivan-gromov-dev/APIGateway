@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,6 +19,7 @@ import (
 	cacheredis "github.com/Djunichi/APIGateway/internal/cachestore/redis"
 	"github.com/Djunichi/APIGateway/internal/config"
 	"github.com/Djunichi/APIGateway/internal/discovery"
+	"github.com/Djunichi/APIGateway/internal/grpcproxy"
 	"github.com/Djunichi/APIGateway/internal/healthcheck"
 	"github.com/Djunichi/APIGateway/internal/metrics"
 	"github.com/Djunichi/APIGateway/internal/middleware"
@@ -27,6 +29,8 @@ import (
 	"github.com/Djunichi/APIGateway/internal/telemetry"
 	"github.com/Djunichi/APIGateway/internal/upstream"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 type Server struct {
@@ -123,7 +127,7 @@ func (s *Server) Run(ctx context.Context) (resultErr error) {
 	defer stopChecks()
 	go healthcheck.New(targets, s.cfg.ActiveHealthCheck, runtime.HTTPClient(s.cfg.ActiveHealthCheck.Timeout)).Run(checkCtx)
 
-	app := httpServer(s.cfg.Server, dynamic)
+	app := publicHTTPServer(s.cfg, dynamic)
 	admin := httpServer(s.cfg.Admin, adminHandler(collector, &s.ready))
 
 	appListener, err := net.Listen("tcp", app.Addr)
@@ -179,6 +183,9 @@ func (s *Server) Reload(ctx context.Context, path string) error {
 	if cfg.Server.Address != s.cfg.Server.Address || cfg.Admin.Address != s.cfg.Admin.Address {
 		return errors.New("reload cannot change listener addresses")
 	}
+	if cfg.GRPC.Enabled != s.cfg.GRPC.Enabled {
+		return errors.New("reload cannot change grpc.enabled")
+	}
 	runtime := s.runtime
 	cfg, err = resolveDiscovery(ctx, cfg)
 	if err != nil {
@@ -229,7 +236,22 @@ func (s *Server) buildHandler(cfg config.Config, runtime *telemetry.Runtime, ver
 	if err != nil {
 		return nil, fmt.Errorf("build global rate limit: %w", err)
 	}
-	return runtime.Handler(middleware.Chain(proxyHandler, middleware.RequestID, middleware.Logging(s.logger, s.runtime.collector), middleware.Recovery(s.logger), middleware.Timeout(cfg.Middleware.RequestTimeout), middleware.CORS(cfg.Middleware.CORS), global)), nil
+	httpHandler := runtime.Handler(middleware.Chain(proxyHandler, middleware.RequestID, middleware.Logging(s.logger, s.runtime.collector), middleware.Recovery(s.logger), middleware.Timeout(cfg.Middleware.RequestTimeout), middleware.CORS(cfg.Middleware.CORS), global))
+	if !cfg.GRPC.Enabled {
+		return httpHandler, nil
+	}
+	grpcHandler, err := grpcproxy.New(cfg.GRPC, s.runtime.collector)
+	if err != nil {
+		return nil, fmt.Errorf("build gRPC proxy: %w", err)
+	}
+	grpcHandler = runtime.Handler(middleware.Chain(grpcHandler, middleware.RequestID, middleware.Logging(s.logger, s.runtime.collector), middleware.Recovery(s.logger)))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor == 2 && strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/grpc") {
+			grpcHandler.ServeHTTP(w, r)
+			return
+		}
+		httpHandler.ServeHTTP(w, r)
+	}), nil
 }
 
 func (s *Server) prepareTelemetry(ctx context.Context) (*telemetry.Runtime, bool, error) {
@@ -356,6 +378,18 @@ func httpServer(cfg config.HTTPServer, handler http.Handler) *http.Server {
 		Addr: cfg.Address, Handler: handler,
 		ReadTimeout: cfg.ReadTimeout, WriteTimeout: cfg.WriteTimeout, IdleTimeout: cfg.IdleTimeout,
 	}
+}
+
+func publicHTTPServer(cfg config.Config, handler http.Handler) *http.Server {
+	publicHandler := handler
+	publicConfig := cfg.Server
+	if cfg.GRPC.Enabled {
+		publicHandler = h2c.NewHandler(publicHandler, &http2.Server{})
+		// Whole-request read/write deadlines are incompatible with long-lived
+		// client/server streams. Per-route/client deadlines still bound RPCs.
+		publicConfig.ReadTimeout, publicConfig.WriteTimeout = 0, 0
+	}
+	return httpServer(publicConfig, publicHandler)
 }
 
 func serve(name string, server *http.Server, listener net.Listener, results chan<- error) {

@@ -61,6 +61,52 @@ routes:
 	}
 }
 
+func TestLoadGRPCConfiguration(t *testing.T) {
+	cfg, err := loadYAML(t, `
+grpc:
+  enabled: true
+  routes:
+    - path_prefix: /echo.Echo/
+      upstream: http://localhost:50051
+      timeout: 30s
+routes:
+  - path_prefix: /api/
+    upstreams: [http://localhost:8081]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.GRPC.Enabled || len(cfg.GRPC.Routes) != 1 || cfg.GRPC.Routes[0].Timeout != 30*time.Second {
+		t.Fatalf("grpc configuration=%+v", cfg.GRPC)
+	}
+}
+
+func TestValidateRejectsUnsafeGRPCConfiguration(t *testing.T) {
+	base := func() Config {
+		cfg := defaults()
+		cfg.Routes = []Route{{PathPrefix: "/api/", Upstreams: []string{"http://localhost:8081"}}}
+		cfg.GRPC = GRPC{Enabled: true, Routes: []GRPCRoute{{PathPrefix: "/echo.Echo/", Upstream: "http://localhost:50051"}}}
+		return cfg
+	}
+	tests := map[string]func(*Config){
+		"disabled routes":  func(c *Config) { c.GRPC.Enabled = false },
+		"bad prefix":       func(c *Config) { c.GRPC.Routes[0].PathPrefix = "echo.Echo" },
+		"bad upstream":     func(c *Config) { c.GRPC.Routes[0].Upstream = "ftp://localhost" },
+		"upstream path":    func(c *Config) { c.GRPC.Routes[0].Upstream = "http://localhost/base" },
+		"negative timeout": func(c *Config) { c.GRPC.Routes[0].Timeout = -time.Second },
+		"duplicate":        func(c *Config) { c.GRPC.Routes = append(c.GRPC.Routes, c.GRPC.Routes[0]) },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			cfg := base()
+			mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
 func TestLoadCircuitBreakerConfiguration(t *testing.T) {
 	cfg, err := loadYAML(t, `
 circuit_breaker:

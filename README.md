@@ -18,6 +18,7 @@ shutdown lifecycle are all visible in application code.
 - concurrent per-route Round Robin balancing across multiple upstreams;
 - per-route weighted round robin and controlled percentage/header/stable-hash rollouts;
 - retries restricted to safe, replayable requests;
+- transparent gRPC proxying over HTTP/2, including streaming and trailers;
 - passive upstream health tracking with a circuit breaker per instance;
 - configurable active HTTP health checks for each upstream instance;
 - global and per-route Redis-backed Token Bucket rate limiting;
@@ -167,6 +168,33 @@ context and a per-attempt timeout.
 This avoids duplicating side effects merely because an upstream connection
 failed after a request may have been processed.
 
+### gRPC proxying
+
+gRPC is an independent opt-in vertical on the public listener. Enabling it
+adds cleartext HTTP/2 (h2c) support for local/internal deployments; `https`
+upstreams use HTTP/2 over TLS. The proxy forwards metadata, client deadlines,
+streaming request/response bodies, cancellation, and response trailers without
+requiring protobuf descriptors:
+
+```yaml
+grpc:
+  enabled: true
+  routes:
+    - path_prefix: /catalog.v1.Catalog/
+      upstream: http://catalog:50051
+      timeout: 0s
+```
+
+Routes use longest-prefix precedence and the prefix is a configured bounded
+observability label. A zero route timeout leaves the stream governed by the
+client deadline and shutdown lifecycle; a positive timeout is an explicit
+whole-RPC limit. Each RPC receives exactly one upstream attempt. The HTTP retry
+policy is deliberately not applied: transparent retries cannot prove that a
+stream is unary, replayable, idempotent, or unprocessed by the upstream.
+
+Production internet-facing deployments should terminate TLS at a mature edge;
+the gateway's public listener does not terminate TLS itself.
+
 ### Passive health and circuit breaking
 
 Each upstream instance owns an independent circuit breaker. Configured 5xx
@@ -249,6 +277,7 @@ Dynamic settings, applied to new requests after a successful reload, include:
 | --- | --- |
 | `routes`, upstreams, prefix stripping | New routing runtime is built atomically |
 | retry and circuit-breaker policies | Applies to newly built proxy handlers |
+| gRPC routes and per-route timeout | New transparent HTTP/2 routing runtime is built atomically |
 | authentication providers and route auth | Providers are revalidated during reload |
 | rate-limit and cache policies | Shared external state is preserved where possible |
 | middleware timeout and CORS | In-flight requests keep their old handler |
@@ -259,6 +288,7 @@ Static settings, which require a restart, include:
 | Static settings | Reason |
 | --- | --- |
 | `server.address`, `admin.address` | Existing listener sockets are retained |
+| `grpc.enabled` | Enabling h2c and streaming-safe listener timeouts changes the public listener |
 | listener-level read/write/idle timeouts | Owned by the existing `http.Server` |
 | process logging and startup environment | Initialized during process startup |
 | Redis backend connections and registrations | Created during startup |
@@ -284,6 +314,10 @@ retry:
   per_attempt_timeout: 2s
   backoff: 25ms
   statuses: [502, 503, 504]
+
+grpc:
+  enabled: false
+  routes: []
 
 circuit_breaker:
   failure_threshold: 5
@@ -320,7 +354,7 @@ The admin server listens on `:9090` by default:
 | `GET /debug/pprof/` | Go runtime profiling |
 
 Metrics cover request rate, status, latency, response size, in-flight requests,
-routes, upstream attempts, retries, auth, cache and rate-limit decisions, plus
+routes, upstream attempts, retries, gRPC status/duration, auth, cache and rate-limit decisions, plus
 Go runtime and process state. Labels are bounded: raw paths, request IDs,
 subjects, and tokens are never used as metric labels. Logs and traces share
 `trace_id` and `span_id` for correlation.
@@ -413,12 +447,11 @@ boundaries and validation rules as human contributions.
 
 ## Current boundaries and roadmap
 
-The current release is an HTTP/1.1 application gateway with static YAML
-configuration and passive health tracking. The next meaningful extensions are:
+The current release is an HTTP/1.1 and HTTP/2 application gateway with
+transactional YAML reload and passive/active health tracking. The next meaningful extensions are:
 
 - active upstream health checks;
 - transactional configuration reload;
-- gRPC proxying;
 - service discovery;
 - additional balancing strategies and controlled traffic shifting.
 
