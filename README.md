@@ -109,6 +109,49 @@ Repeated Users requests rotate between `backend-1`, `backend-2`, and
 demonstration; an optional [Keycloak deployment](deployments/keycloak) shows the
 same gateway contract with a real OIDC provider.
 
+The same stack exposes the standard gRPC health service through the gateway.
+The repository includes a descriptor-free Go client, so no external `grpcurl`
+installation is required:
+
+```powershell
+go run ./examples/grpc-health -check localhost:8080
+```
+
+Run the complete cross-feature smoke check after Compose becomes ready:
+
+```powershell
+.\test\smoke\docker.ps1
+```
+
+```bash
+sh test/smoke/docker.sh
+```
+
+The smoke runner verifies liveness/readiness, HTTP routing, Redis response-cache
+miss/hit behaviour, JWT authentication, DNS-discovered Users traffic, metrics,
+and the gRPC proxy. Retry, circuit-breaker, health-transition, reload, rollout,
+rate-limit exhaustion, and streaming edge cases remain deterministic
+integration-test scenarios rather than destructive demo-stack checks.
+
+### Run processes locally
+
+Docker Compose is the single-command full stand. To run binaries directly,
+start Redis on `localhost:6379`, then run these commands in separate terminals:
+
+```powershell
+go run ./examples/backend
+$env:BACKEND_ADDRESS=":8082"; $env:SERVICE_NAME="backend-2"; go run ./examples/backend
+$env:BACKEND_ADDRESS=":8083"; $env:SERVICE_NAME="backend-3"; go run ./examples/backend
+go run ./examples/billing
+go run ./examples/grpc-health
+go run ./cmd/gateway -config configs/gateway.yaml
+```
+
+The default local configuration intentionally leaves JWT, rate limiting, cache,
+and tracing disabled because their complete dependency wiring is demonstrated
+by Compose. It enables active health checks, HTTP retries/circuit breaking,
+balancing, file reload, and the gRPC route.
+
 ## Full observability demo
 
 The optional override adds Prometheus, a provisioned Grafana dashboard,
@@ -316,8 +359,11 @@ retry:
   statuses: [502, 503, 504]
 
 grpc:
-  enabled: false
-  routes: []
+  enabled: true
+  routes:
+    - path_prefix: /grpc.health.v1.Health/
+      upstream: http://localhost:50051
+      timeout: 5s
 
 circuit_breaker:
   failure_threshold: 5
@@ -438,6 +484,7 @@ internal/upstream/            upstream identity and health state
 test/integration/             real-network scenarios and shared harness
 test/load/                    manual performance baselines
 scripts/                      cross-platform verification harness
+test/smoke/                   Docker cross-feature smoke runners
 ```
 
 Package-level architectural contracts are documented in the repository's
@@ -447,18 +494,19 @@ boundaries and validation rules as human contributions.
 
 ## Current boundaries and roadmap
 
-The current release is an HTTP/1.1 and HTTP/2 application gateway with
-transactional YAML reload and passive/active health tracking. The next meaningful extensions are:
+Version 1.0 is an HTTP/1.1 and HTTP/2 application gateway with transactional
+YAML reload, static and DNS-backed upstream discovery, multiple balancing and
+rollout strategies, and passive/active health tracking.
 
-- active upstream health checks;
-- transactional configuration reload;
-- service discovery;
-- additional balancing strategies and controlled traffic shifting.
+The next milestone focuses on continuous DNS refresh using the existing
+`interval` and `grace` contract, followed by resilience budgets, overload
+protection, release hardening, and carefully bounded discovery integrations.
+See the [project roadmap](ROADMAP.md) for ordered milestones and completion
+criteria.
 
-TLS termination, a WAF, a management control plane, multi-region coordination,
-and automatic certificate management are intentionally outside the current
-scope. For those requirements, deploy behind a mature edge proxy or select one
-of the established products above.
+TLS termination and a remote control plane remain exploratory. A general-purpose
+WAF, DDoS absorption, multi-region edge coordination, and automatic public
+certificate issuance are intentionally delegated to mature edge products.
 
 ## Local-demo security
 

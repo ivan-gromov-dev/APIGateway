@@ -37,8 +37,11 @@ retry:
   statuses: [502, 503, 504]
 
 grpc:
-  enabled: false
-  routes: []
+  enabled: true
+  routes:
+    - path_prefix: /grpc.health.v1.Health/
+      upstream: http://localhost:50051
+      timeout: 5s
 
 circuit_breaker:
   failure_threshold: 5

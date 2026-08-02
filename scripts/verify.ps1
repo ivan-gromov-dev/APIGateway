@@ -37,6 +37,32 @@ try {
         throw "go test failed"
     }
 
+	New-Item -ItemType Directory -Force .cache/verify/coverage | Out-Null
+	$coverageFailures = @()
+	go list ./internal/... | ForEach-Object {
+		$package = $_
+		$profileName = $package -replace '[^A-Za-z0-9_-]', '_'
+		$profile = ".cache/verify/coverage/$profileName.out"
+		$coverageArguments = @("test", "-count=1", "-covermode=atomic", "-coverprofile=$profile")
+		if ($Race) {
+			$coverageArguments += "-race"
+		}
+		$coverageArguments += $package
+		& go @coverageArguments | Out-Host
+		if ($LASTEXITCODE -ne 0) {
+			throw "coverage test failed for $package"
+		}
+		$total = (& go tool cover "-func=$profile" | Select-String '^total:') -split '\s+'
+		$percentage = [double]$total[-1].TrimEnd('%')
+		Write-Host ("{0,-70} {1,6:N1}%" -f $package, $percentage)
+		if ($percentage -le 75) {
+			$coverageFailures += "$package coverage $percentage% must be greater than 75%"
+		}
+	}
+	if ($coverageFailures.Count -gt 0) {
+		throw ($coverageFailures -join "`n")
+	}
+
     New-Item -ItemType Directory -Force .cache/verify | Out-Null
     go build -o .cache/verify/gateway.exe ./cmd/gateway
     if ($LASTEXITCODE -ne 0) {
@@ -54,6 +80,10 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "identity-service build failed"
     }
+	go build -o .cache/verify/grpc-health.exe ./examples/grpc-health
+	if ($LASTEXITCODE -ne 0) {
+		throw "gRPC health service build failed"
+	}
 
     Write-Host "Verification completed successfully."
 } finally {
