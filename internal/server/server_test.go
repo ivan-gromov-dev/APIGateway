@@ -62,6 +62,25 @@ func TestReloadRejectsWhenGatewayIsNotRunning(t *testing.T) {
 	}
 }
 
+func TestResolveDiscoveryUsesDNSAndValidatesWeights(t *testing.T) {
+	cfg := testConfig(":1", ":2", "http://localhost")
+	cfg.Routes[0].Upstreams = nil
+	cfg.Routes[0].Discovery = &config.Discovery{Provider: "dns", Name: "localhost", Scheme: "http", Port: 8081}
+	resolved, err := resolveDiscovery(context.Background(), cfg)
+	if err != nil || len(resolved.Routes[0].Upstreams) == 0 {
+		t.Fatalf("resolved=%+v err=%v", resolved.Routes, err)
+	}
+	cfg.Routes[0].Weights = []int{1}
+	if _, err := resolveDiscovery(context.Background(), cfg); err == nil {
+		t.Fatal("expected discovered weight mismatch")
+	}
+
+	cfg.Routes[0].Discovery.Provider = "missing"
+	if _, err := resolveDiscovery(context.Background(), cfg); err == nil {
+		t.Fatal("expected unsupported provider error")
+	}
+}
+
 func TestReloadRejectsInvalidCandidateAndListenerChange(t *testing.T) {
 	gateway := New(testConfig(":1", ":2", "http://localhost"), discardLogger())
 	gateway.dynamic = &dynamicHandler{}

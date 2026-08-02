@@ -94,10 +94,13 @@ routes:
           burst: 10
           ttl: 10m
   - path_prefix: /api/
-    upstreams:
-      - http://backend-1:8081
-      - http://backend-2:8081
-      - http://backend-3:8081
+    discovery:
+      provider: dns
+      name: users
+      scheme: http
+      port: 8081
+      interval: 30s
+      grace: 2m
     strip_prefix: true
     balancer: weighted_round_robin
     weights: [9, 1, 1]

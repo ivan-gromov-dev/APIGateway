@@ -168,6 +168,7 @@ func (c *CORS) UnmarshalYAML(value *yaml.Node) error {
 type Route struct {
 	PathPrefix  string          `yaml:"path_prefix"`
 	Upstreams   []string        `yaml:"upstreams"`
+	Discovery   *Discovery      `yaml:"discovery"`
 	Balancer    string          `yaml:"balancer"`
 	Weights     []int           `yaml:"weights"`
 	Rollout     Rollout         `yaml:"rollout"`
@@ -175,6 +176,18 @@ type Route struct {
 	RateLimits  []RateLimitRule `yaml:"rate_limits"`
 	Auth        RouteAuth       `yaml:"auth"`
 	Cache       RouteCache      `yaml:"cache"`
+}
+
+// Discovery configures runtime resolution of a route's upstream instances.
+// The first supported provider is DNS; resolved addresses retain the route's
+// configured scheme and port.
+type Discovery struct {
+	Provider string        `yaml:"provider"`
+	Name     string        `yaml:"name"`
+	Scheme   string        `yaml:"scheme"`
+	Port     int           `yaml:"port"`
+	Interval time.Duration `yaml:"interval"`
+	Grace    time.Duration `yaml:"grace"`
 }
 
 // Rollout controls gradual exposure of the final upstream in a route. The
@@ -447,7 +460,17 @@ func (c Config) Validate() error {
 		}
 		seen[route.PathPrefix] = struct{}{}
 		if len(route.Upstreams) == 0 {
-			return fmt.Errorf("route %d: at least one upstream is required", i)
+			if route.Discovery == nil {
+				return fmt.Errorf("route %d: at least one upstream or discovery is required", i)
+			}
+		}
+		if route.Discovery != nil {
+			if route.Discovery.Provider != "dns" || route.Discovery.Name == "" || (route.Discovery.Scheme != "http" && route.Discovery.Scheme != "https") || route.Discovery.Port < 1 || route.Discovery.Port > 65535 {
+				return fmt.Errorf("route %d: discovery requires provider dns, name, http(s) scheme, and valid port", i)
+			}
+			if route.Discovery.Interval <= 0 || route.Discovery.Grace < 0 {
+				return fmt.Errorf("route %d: discovery interval must be positive and grace non-negative", i)
+			}
 		}
 		if route.Balancer == "" {
 			route.Balancer = "round_robin"
@@ -461,7 +484,7 @@ func (c Config) Validate() error {
 		if route.Balancer == "round_robin" && len(route.Weights) > 0 {
 			return fmt.Errorf("route %d: weights require weighted_round_robin", i)
 		}
-		if len(route.Weights) != 0 && len(route.Weights) != len(route.Upstreams) {
+		if len(route.Weights) != 0 && route.Discovery == nil && len(route.Weights) != len(route.Upstreams) {
 			return fmt.Errorf("route %d: weights must match upstreams", i)
 		}
 		for _, weight := range route.Weights {
