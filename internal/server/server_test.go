@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,6 +19,7 @@ import (
 	"github.com/Djunichi/APIGateway/internal/config"
 	"github.com/Djunichi/APIGateway/internal/metrics"
 	"github.com/Djunichi/APIGateway/internal/ratelimit"
+	"github.com/Djunichi/APIGateway/internal/telemetry"
 )
 
 func TestReadinessHandlerReflectsState(t *testing.T) {
@@ -34,6 +37,45 @@ func TestReadinessHandlerReflectsState(t *testing.T) {
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"ready"`) {
 		t.Fatalf("ready response = %d %q", response.Code, response.Body.String())
+	}
+}
+
+func TestOkHandler(t *testing.T) {
+	response := httptest.NewRecorder()
+	ok(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d", response.Code)
+	}
+}
+
+func TestWithTelemetryOption(t *testing.T) {
+	runtime := telemetry.Disabled()
+	server := New(testConfig(":1", ":2", "http://localhost"), discardLogger(), WithTelemetry(runtime))
+	if server.telemetry != runtime {
+		t.Fatal("telemetry option was not applied")
+	}
+}
+
+func TestReloadRejectsWhenGatewayIsNotRunning(t *testing.T) {
+	if err := New(testConfig(":1", ":2", "http://localhost"), discardLogger()).Reload(context.Background(), "missing"); err == nil {
+		t.Fatal("expected not-running error")
+	}
+}
+
+func TestReloadRejectsInvalidCandidateAndListenerChange(t *testing.T) {
+	gateway := New(testConfig(":1", ":2", "http://localhost"), discardLogger())
+	gateway.dynamic = &dynamicHandler{}
+	gateway.runtime = &runtimeState{telemetry: telemetry.Disabled(), registry: ratelimit.NewRegistry(), collector: &metrics.Collector{}}
+	if err := gateway.Reload(context.Background(), filepath.Join(t.TempDir(), "missing.yaml")); err == nil {
+		t.Fatal("expected load error")
+	}
+	path := filepath.Join(t.TempDir(), "gateway.yaml")
+	contents := "server:\n  address: :3\nadmin:\n  address: :2\nroutes:\n  - path_prefix: /api/\n    upstreams: [http://localhost]\n"
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.Reload(context.Background(), path); err == nil {
+		t.Fatal("expected listener address error")
 	}
 }
 
