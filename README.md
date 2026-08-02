@@ -183,11 +183,51 @@ and storage operations have explicit size and time limits.
 
 ### Lifecycle
 
-Configuration is parsed and validated before listeners start. Unknown YAML
+Configuration is parsed and validated before listeners start. The gateway
+polls the same YAML file periodically (configurable with
+`-reload-interval`, default `30s`) and reloads it when its metadata changes.
+The candidate is fully
+parsed, environment-overridden, validated, and wired before it is atomically
+published; invalid candidates leave the previous configuration serving
+traffic. Listener addresses are immutable during reload. Unknown YAML
 fields, multiple documents, invalid durations or URLs, duplicate route prefixes,
 and duplicate upstreams fail startup. Readiness becomes successful only after
 both listeners are open, changes to unavailable before shutdown, and then both
 servers drain within the configured deadline.
+
+### Dynamic and static configuration
+
+The file watcher periodically checks the configuration file. The default
+interval is configured in YAML and can be overridden with
+`-reload-interval`; setting it to `0` disables polling. A reload is
+transactional: the candidate is parsed, validated, and wired first. If any
+step fails, the previous runtime remains active and continues serving traffic.
+
+Dynamic settings, applied to new requests after a successful reload, include:
+
+| Dynamic settings | Notes |
+| --- | --- |
+| `routes`, upstreams, prefix stripping | New routing runtime is built atomically |
+| retry and circuit-breaker policies | Applies to newly built proxy handlers |
+| authentication providers and route auth | Providers are revalidated during reload |
+| rate-limit and cache policies | Shared external state is preserved where possible |
+| middleware timeout and CORS | In-flight requests keep their old handler |
+| `active_health_check` policy | New checks use the candidate configuration |
+
+Static settings, which require a restart, include:
+
+| Static settings | Reason |
+| --- | --- |
+| `server.address`, `admin.address` | Existing listener sockets are retained |
+| listener-level read/write/idle timeouts | Owned by the existing `http.Server` |
+| process logging and startup environment | Initialized during process startup |
+| Redis backend connections and registrations | Created during startup |
+| telemetry exporter lifecycle | Startup-owned resources are reused |
+| process flags and environment variables | Read during initialization |
+
+Address changes are rejected during reload. Other static changes remain at
+their previous runtime values until restart. Requests already in flight are
+allowed to finish using the old runtime.
 
 ## Configuration
 
@@ -196,6 +236,9 @@ uses [`configs/gateway.docker.yaml`](configs/gateway.docker.yaml). A shortened
 example:
 
 ```yaml
+reload:
+  interval: 30s
+
 retry:
   max_attempts: 3
   per_attempt_timeout: 2s
@@ -252,7 +295,7 @@ demonstrating the engineering trade-offs that those products encapsulate.
 | --- | --- | --- | --- | --- |
 | Primary fit | Inspectable Go gateway and tailored application policies | Proven web server, reverse proxy, buffering, caching, and static edge configuration | High-performance L4/L7 data plane, service mesh, rich resilience, and xDS control planes | Cloud-native ingress and edge routing driven by infrastructure providers |
 | Configuration model | Strict static YAML plus selected environment overrides | Declarative server/location/upstream configuration | Static bootstrap or dynamic xDS APIs | Static install configuration plus dynamic provider-discovered routing |
-| Discovery and live updates | Static upstream list; reload is not implemented yet | DNS and configuration reload patterns; advanced capabilities vary by edition | Extensive LDS/RDS/CDS/EDS/SDS discovery through xDS | Native Docker, Kubernetes, Consul, file, and other providers |
+| Discovery and live updates | Static upstream list with transactional file reload | DNS and configuration reload patterns; advanced capabilities vary by edition | Extensive LDS/RDS/CDS/EDS/SDS discovery through xDS | Native Docker, Kubernetes, Consul, file, and other providers |
 | Resilience in scope | Safe retries and passive per-instance circuit breakers | Mature upstream retry/failover primitives | Broad circuit breaking, outlier detection, health checking, retry budgets, and load balancing | Middleware/service-oriented retry, health, and balancing features |
 | Extensibility | Direct Go packages and small internal interfaces | Modules and njs | HTTP/network filters, Wasm, dynamic modules, and control-plane APIs | Middleware, plugins, and provider ecosystem |
 | Best reason to choose it | You need to understand or own the policy code end to end | You need a mature, efficient general-purpose reverse proxy or web edge | You need service-mesh-grade protocols, discovery, and control-plane integration | You want low-friction routing that follows orchestrator state |

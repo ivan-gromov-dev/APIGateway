@@ -84,3 +84,5 @@ routes:
       - http://localhost:8082
       - http://localhost:8083
     strip_prefix: true
+reload:
+  interval: 30s

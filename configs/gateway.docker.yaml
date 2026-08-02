@@ -103,3 +103,5 @@ routes:
       required: true
       provider: demo
       required_scopes: [users.read]
+reload:
+  interval: 30s

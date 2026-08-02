@@ -25,6 +25,7 @@ import (
 	redisstore "github.com/Djunichi/APIGateway/internal/ratestore/redis"
 	"github.com/Djunichi/APIGateway/internal/telemetry"
 	"github.com/Djunichi/APIGateway/internal/upstream"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Server struct {
@@ -34,7 +35,26 @@ type Server struct {
 	rateRegistry *ratelimit.Registry
 	cacheStore   cache.Store
 	telemetry    *telemetry.Runtime
+	reloadMu     sync.Mutex
+	runtime      *runtimeState
+	dynamic      *dynamicHandler
 }
+
+type runtimeState struct {
+	telemetry  *telemetry.Runtime
+	collector  *metrics.Collector
+	registry   *ratelimit.Registry
+	cacheStore cache.Store
+	transport  func(time.Duration) *http.Client
+	tracer     trace.Tracer
+}
+
+type dynamicHandler struct{ value atomic.Value }
+
+func (h *dynamicHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.value.Load().(http.Handler).ServeHTTP(w, r)
+}
+func (h *dynamicHandler) Store(next http.Handler) { h.value.Store(next) }
 
 type Option func(*Server)
 
@@ -85,32 +105,20 @@ func (s *Server) Run(ctx context.Context) (resultErr error) {
 		return err
 	}
 	defer closeCache()
+	s.runtime = &runtimeState{telemetry: runtime, collector: collector, registry: registry, cacheStore: cacheStore, transport: runtime.HTTPClient, tracer: runtime.Tracer()}
 	var targets []*upstream.Target
-	proxyHandler, err := proxy.HandlerWithObservabilityAndTargets(s.cfg.Routes, s.cfg.Retry, s.cfg.CircuitBreaker,
-		s.cfg.RateLimit, registry, verifiers, s.cfg.Cache, cacheStore, s.logger,
-		runtime.Transport(http.DefaultTransport), runtime.Tracer(), collector, &targets)
+	handler, err := s.buildHandler(s.cfg, runtime, verifiers, &targets)
 	if err != nil {
 		return err
 	}
-	globalRateLimit, err := middleware.BuildRateLimitWithMetrics(s.cfg.RateLimit.Rules, s.cfg.RateLimit, registry, collector, "global")
-	if err != nil {
-		return fmt.Errorf("build global rate limit: %w", err)
-	}
-	handler := middleware.Chain(
-		proxyHandler,
-		middleware.RequestID,
-		middleware.Logging(s.logger, collector),
-		middleware.Recovery(s.logger),
-		middleware.Timeout(s.cfg.Middleware.RequestTimeout),
-		middleware.CORS(s.cfg.Middleware.CORS),
-		globalRateLimit,
-	)
-	handler = runtime.Handler(handler)
+	dynamic := &dynamicHandler{}
+	dynamic.Store(handler)
+	s.dynamic = dynamic
 	checkCtx, stopChecks := context.WithCancel(ctx)
 	defer stopChecks()
 	go healthcheck.New(targets, s.cfg.ActiveHealthCheck, runtime.HTTPClient(s.cfg.ActiveHealthCheck.Timeout)).Run(checkCtx)
 
-	app := httpServer(s.cfg.Server, handler)
+	app := httpServer(s.cfg.Server, dynamic)
 	admin := httpServer(s.cfg.Admin, adminHandler(collector, &s.ready))
 
 	appListener, err := net.Listen("tcp", app.Addr)
@@ -149,6 +157,51 @@ func (s *Server) Run(ctx context.Context) (resultErr error) {
 	}
 
 	return errors.Join(runErr, shutdownErr)
+}
+
+// Reload validates and prepares a new configuration before atomically making it
+// visible to new requests. Listener addresses cannot change during a reload.
+func (s *Server) Reload(ctx context.Context, path string) error {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	if s.dynamic == nil || s.runtime == nil {
+		return errors.New("gateway is not running")
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return fmt.Errorf("load configuration: %w", err)
+	}
+	if cfg.Server.Address != s.cfg.Server.Address || cfg.Admin.Address != s.cfg.Admin.Address {
+		return errors.New("reload cannot change listener addresses")
+	}
+	runtime := s.runtime
+	verifiers, err := s.prepareAuthWithClient(ctx, runtime.transport)
+	if err != nil {
+		return err
+	}
+	var targets []*upstream.Target
+	handler, err := s.buildHandler(cfg, runtime.telemetry, verifiers, &targets)
+	if err != nil {
+		return err
+	}
+	if s.dynamic == nil {
+		return errors.New("gateway is not running")
+	}
+	s.dynamic.Store(handler)
+	s.cfg = cfg
+	return nil
+}
+
+func (s *Server) buildHandler(cfg config.Config, runtime *telemetry.Runtime, verifiers map[string]*auth.Verifier, targets *[]*upstream.Target) (http.Handler, error) {
+	proxyHandler, err := proxy.HandlerWithObservabilityAndTargets(cfg.Routes, cfg.Retry, cfg.CircuitBreaker, cfg.RateLimit, s.runtime.registry, verifiers, cfg.Cache, s.runtime.cacheStore, s.logger, runtime.Transport(http.DefaultTransport), runtime.Tracer(), s.runtime.collector, targets)
+	if err != nil {
+		return nil, err
+	}
+	global, err := middleware.BuildRateLimitWithMetrics(cfg.RateLimit.Rules, cfg.RateLimit, s.runtime.registry, s.runtime.collector, "global")
+	if err != nil {
+		return nil, fmt.Errorf("build global rate limit: %w", err)
+	}
+	return runtime.Handler(middleware.Chain(proxyHandler, middleware.RequestID, middleware.Logging(s.logger, s.runtime.collector), middleware.Recovery(s.logger), middleware.Timeout(cfg.Middleware.RequestTimeout), middleware.CORS(cfg.Middleware.CORS), global)), nil
 }
 
 func (s *Server) prepareTelemetry(ctx context.Context) (*telemetry.Runtime, bool, error) {
