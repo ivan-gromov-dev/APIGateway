@@ -8,6 +8,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -28,6 +31,7 @@ type settings struct {
 	retry        config.Retry
 	circuit      config.CircuitBreaker
 	userStatuses map[int][]int
+	activeHealth config.ActiveHealthCheck
 	rateLimit    config.RateLimit
 	rateStore    ratelimit.Store
 	auth         config.Auth
@@ -91,6 +95,11 @@ func WithUsers(count int) Option {
 	}
 }
 
+// WithActiveHealthCheck enables active upstream probing for the scenario.
+func WithActiveHealthCheck(check config.ActiveHealthCheck) Option {
+	return func(settings *settings) { settings.activeHealth = check }
+}
+
 // WithBilling adds a billing-service upstream.
 func WithBilling() Option {
 	return func(settings *settings) {
@@ -106,8 +115,11 @@ type Environment struct {
 	client        *http.Client
 	cancel        context.CancelFunc
 	runResult     chan error
+	gateway       *server.Server
+	config        config.Config
 	stopOnce      sync.Once
 	stopErr       error
+	users         []*upstream
 }
 
 // New starts a gateway with real public and administrative network listeners.
@@ -125,6 +137,7 @@ func New(t testing.TB, options ...Option) *Environment {
 	}
 
 	routes := make([]config.Route, 0, 2)
+	users := make([]*upstream, 0, cfg.users)
 	if cfg.billing {
 		billing := newUpstream(t, "billing")
 		routes = append(routes, config.Route{
@@ -137,6 +150,7 @@ func New(t testing.TB, options ...Option) *Environment {
 		upstreams := make([]string, 0, cfg.users)
 		for i := 1; i <= cfg.users; i++ {
 			upstream := newUpstreamWithStatuses(t, fmt.Sprintf("users-%d", i), cfg.userStatuses[i]...)
+			users = append(users, upstream)
 			upstreams = append(upstreams, upstream.URL())
 		}
 		routes = append(routes, config.Route{
@@ -168,12 +182,13 @@ func New(t testing.TB, options ...Option) *Environment {
 		Middleware: config.Middleware{
 			RequestTimeout: time.Second,
 		},
-		Retry:          cfg.retry,
-		CircuitBreaker: cfg.circuit,
-		RateLimit:      cfg.rateLimit,
-		Auth:           cfg.auth,
-		Cache:          cfg.cache,
-		Routes:         routes,
+		Retry:             cfg.retry,
+		CircuitBreaker:    cfg.circuit,
+		RateLimit:         cfg.rateLimit,
+		Auth:              cfg.auth,
+		Cache:             cfg.cache,
+		Routes:            routes,
+		ActiveHealthCheck: cfg.activeHealth,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -184,6 +199,8 @@ func New(t testing.TB, options ...Option) *Environment {
 		client:        &http.Client{Timeout: 2 * time.Second},
 		cancel:        cancel,
 		runResult:     make(chan error, 1),
+		config:        gatewayConfig,
+		users:         users,
 	}
 	var serverOptions []server.Option
 	if cfg.rateStore != nil {
@@ -200,6 +217,7 @@ func New(t testing.TB, options ...Option) *Environment {
 		serverOptions = append(serverOptions, server.WithTelemetry(cfg.telemetry))
 	}
 	gateway := server.New(gatewayConfig, slog.New(slog.NewTextHandler(io.Discard, nil)), serverOptions...)
+	environment.gateway = gateway
 	go func() {
 		environment.runResult <- gateway.Run(ctx)
 	}()
@@ -210,6 +228,36 @@ func New(t testing.TB, options ...Option) *Environment {
 	})
 	environment.waitForReady()
 	return environment
+}
+
+// SetUserHealthStatus changes the status returned by a users upstream's /healthz endpoint.
+func (e *Environment) SetUserHealthStatus(instance, status int) {
+	if instance < 1 || instance > len(e.users) {
+		e.t.Fatalf("users instance %d out of range", instance)
+	}
+	e.users[instance-1].SetHealthStatus(status)
+}
+
+// ReloadRoutes writes a temporary valid gateway configuration and applies it
+// through the same transactional path used by production reloads.
+func (e *Environment) ReloadRoutes(upstreams ...string) error {
+	cfg := e.config
+	cfg.Routes = []config.Route{{PathPrefix: "/api/", Upstreams: upstreams, StripPrefix: true}}
+	data := []byte(fmt.Sprintf("server:\n  address: %s\nadmin:\n  address: %s\nroutes:\n  - path_prefix: /api/\n    upstreams: [%s]\n    strip_prefix: true\n", cfg.Server.Address, cfg.Admin.Address, strings.Join(upstreams, ", ")))
+	path := filepath.Join(e.t.TempDir(), "gateway.yaml")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return err
+	}
+	return e.gateway.Reload(context.Background(), path)
+}
+
+// ReloadBroken attempts to apply malformed YAML and returns the reload error.
+func (e *Environment) ReloadBroken() error {
+	path := filepath.Join(e.t.TempDir(), "gateway.yaml")
+	if err := os.WriteFile(path, []byte("routes: ["), 0600); err != nil {
+		return err
+	}
+	return e.gateway.Reload(context.Background(), path)
 }
 
 // Stop gracefully stops the gateway. It is safe to call more than once.

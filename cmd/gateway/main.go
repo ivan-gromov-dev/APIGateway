@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/Djunichi/APIGateway/internal/config"
+	"github.com/Djunichi/APIGateway/internal/configwatcher"
 	"github.com/Djunichi/APIGateway/internal/logger"
 	"github.com/Djunichi/APIGateway/internal/server"
 )
@@ -24,6 +25,7 @@ func main() {
 
 func run() error {
 	configPath := flag.String("config", "configs/gateway.yaml", "path to the YAML configuration")
+	reloadInterval := flag.Duration("reload-interval", 0, "configuration polling interval override; 0 uses config")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
@@ -43,7 +45,19 @@ func run() error {
 		"routes", len(cfg.Routes),
 	)
 
-	if err := server.New(cfg, log).Run(ctx); err != nil {
+	gateway := server.New(cfg, log)
+	interval := cfg.Reload.Interval
+	if *reloadInterval > 0 {
+		interval = *reloadInterval
+	}
+	if interval > 0 {
+		go func() {
+			if err := configwatcher.Watch(ctx, *configPath, interval, gateway.Reload); err != nil {
+				log.Error("configuration watcher stopped", "error", err)
+			}
+		}()
+	}
+	if err := gateway.Run(ctx); err != nil {
 		return fmt.Errorf("run gateway: %w", err)
 	}
 

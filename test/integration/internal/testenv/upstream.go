@@ -17,16 +17,17 @@ type RecordedRequest struct {
 }
 
 type upstream struct {
-	service  string
-	server   *httptest.Server
-	mu       sync.Mutex
-	requests []RecordedRequest
-	statuses []int
+	service      string
+	server       *httptest.Server
+	mu           sync.Mutex
+	requests     []RecordedRequest
+	statuses     []int
+	healthStatus int
 }
 
 func newUpstream(t testing.TB, service string) *upstream {
 	t.Helper()
-	instance := &upstream{service: service}
+	instance := &upstream{service: service, healthStatus: http.StatusOK}
 	instance.server = httptest.NewServer(http.HandlerFunc(instance.serveHTTP))
 	t.Cleanup(instance.server.Close)
 	return instance
@@ -53,6 +54,9 @@ func (u *upstream) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	u.mu.Lock()
 	u.requests = append(u.requests, request)
 	status := http.StatusOK
+	if r.URL.Path == "/healthz" {
+		status = u.healthStatus
+	}
 	if len(u.statuses) > 0 {
 		status = u.statuses[0]
 		u.statuses = u.statuses[1:]
@@ -68,3 +72,5 @@ func (u *upstream) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		Traceparent: request.Traceparent,
 	})
 }
+
+func (u *upstream) SetHealthStatus(status int) { u.mu.Lock(); u.healthStatus = status; u.mu.Unlock() }

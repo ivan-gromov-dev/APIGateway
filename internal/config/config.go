@@ -29,6 +29,31 @@ type Config struct {
 	Auth              Auth              `yaml:"auth"`
 	Cache             Cache             `yaml:"cache"`
 	Telemetry         Telemetry         `yaml:"telemetry"`
+	Reload            Reload            `yaml:"reload"`
+}
+
+type Reload struct {
+	Interval time.Duration `yaml:"interval"`
+}
+
+func (r *Reload) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "interval"); err != nil {
+		return err
+	}
+	var raw struct {
+		Interval string `yaml:"interval"`
+	}
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+	if raw.Interval != "" {
+		d, err := time.ParseDuration(raw.Interval)
+		if err != nil {
+			return fmt.Errorf("interval: %w", err)
+		}
+		r.Interval = d
+	}
+	return nil
 }
 
 type ActiveHealthCheck struct {
@@ -322,10 +347,14 @@ func defaults() Config {
 			MaxBodyBytes: 1 << 20, Redis: Redis{Address: "localhost:6379", KeyPrefix: "gateway:cache"}},
 		Telemetry: Telemetry{Tracing: Tracing{ServiceName: "api-gateway", Endpoint: "localhost:4318",
 			Insecure: true, SampleRatio: 1, ShutdownTimeout: 5 * time.Second}},
+		Reload: Reload{Interval: 30 * time.Second},
 	}
 }
 
 func (c Config) Validate() error {
+	if c.Reload.Interval < 0 {
+		return errors.New("reload interval must not be negative")
+	}
 	if err := c.validateTracing(); err != nil {
 		return err
 	}
