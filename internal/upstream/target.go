@@ -41,3 +41,6 @@ func (t *Target) Acquire(now time.Time) (circuitbreaker.DoneFunc, bool) {
 func (t *Target) Snapshot() circuitbreaker.Snapshot {
 	return t.breaker.Snapshot()
 }
+
+// SetHealth records an active health-check result for this target.
+func (t *Target) SetHealth(healthy bool, at time.Time) { t.breaker.SetHealth(healthy, at) }

@@ -17,12 +17,14 @@ import (
 	"github.com/Djunichi/APIGateway/internal/cache"
 	cacheredis "github.com/Djunichi/APIGateway/internal/cachestore/redis"
 	"github.com/Djunichi/APIGateway/internal/config"
+	"github.com/Djunichi/APIGateway/internal/healthcheck"
 	"github.com/Djunichi/APIGateway/internal/metrics"
 	"github.com/Djunichi/APIGateway/internal/middleware"
 	"github.com/Djunichi/APIGateway/internal/proxy"
 	"github.com/Djunichi/APIGateway/internal/ratelimit"
 	redisstore "github.com/Djunichi/APIGateway/internal/ratestore/redis"
 	"github.com/Djunichi/APIGateway/internal/telemetry"
+	"github.com/Djunichi/APIGateway/internal/upstream"
 )
 
 type Server struct {
@@ -83,9 +85,10 @@ func (s *Server) Run(ctx context.Context) (resultErr error) {
 		return err
 	}
 	defer closeCache()
-	proxyHandler, err := proxy.HandlerWithObservability(s.cfg.Routes, s.cfg.Retry, s.cfg.CircuitBreaker,
+	var targets []*upstream.Target
+	proxyHandler, err := proxy.HandlerWithObservabilityAndTargets(s.cfg.Routes, s.cfg.Retry, s.cfg.CircuitBreaker,
 		s.cfg.RateLimit, registry, verifiers, s.cfg.Cache, cacheStore, s.logger,
-		runtime.Transport(http.DefaultTransport), runtime.Tracer(), collector)
+		runtime.Transport(http.DefaultTransport), runtime.Tracer(), collector, &targets)
 	if err != nil {
 		return err
 	}
@@ -103,6 +106,9 @@ func (s *Server) Run(ctx context.Context) (resultErr error) {
 		globalRateLimit,
 	)
 	handler = runtime.Handler(handler)
+	checkCtx, stopChecks := context.WithCancel(ctx)
+	defer stopChecks()
+	go healthcheck.New(targets, s.cfg.ActiveHealthCheck, runtime.HTTPClient(s.cfg.ActiveHealthCheck.Timeout)).Run(checkCtx)
 
 	app := httpServer(s.cfg.Server, handler)
 	admin := httpServer(s.cfg.Admin, adminHandler(collector, &s.ready))

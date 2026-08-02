@@ -63,6 +63,16 @@ func HandlerWithObservability(routes []config.Route, retry config.Retry, circuit
 		}, base, tracer, collector)
 }
 
+func HandlerWithObservabilityAndTargets(routes []config.Route, retry config.Retry, circuit config.CircuitBreaker,
+	rate config.RateLimit, registry *ratelimit.Registry, verifiers map[string]*auth.Verifier,
+	cacheConfig config.Cache, cacheStore cache.Store, logger *slog.Logger,
+	base http.RoundTripper, tracer trace.Tracer, collector *metrics.Collector, targets *[]*upstream.Target) (http.Handler, error) {
+	return handlerWithFeaturesAndObservability(routes, retry, circuit, rate, registry, verifiers, cacheConfig, cacheStore, logger,
+		func(upstreams []*upstream.Target) (balancer.Balancer, error) {
+			return balancer.NewRoundRobin(upstreams)
+		}, base, tracer, collector, targets)
+}
+
 func normalizedCircuitConfig(circuit config.CircuitBreaker) config.CircuitBreaker {
 	if circuit.FailureThreshold <= 0 {
 		circuit.FailureThreshold = 5
@@ -120,7 +130,7 @@ func handlerWithFeaturesAndObservability(
 	routes []config.Route, retry config.Retry, circuit config.CircuitBreaker,
 	rate config.RateLimit, registry *ratelimit.Registry, verifiers map[string]*auth.Verifier,
 	cacheConfig config.Cache, cacheStore cache.Store, logger *slog.Logger,
-	newBalancer balancer.Factory, base http.RoundTripper, tracer trace.Tracer, collector *metrics.Collector,
+	newBalancer balancer.Factory, base http.RoundTripper, tracer trace.Tracer, collector *metrics.Collector, sinks ...*[]*upstream.Target,
 ) (http.Handler, error) {
 	if newBalancer == nil {
 		return nil, fmt.Errorf("balancer factory is required")
@@ -146,6 +156,11 @@ func handlerWithFeaturesAndObservability(
 				return nil, fmt.Errorf("create upstream %q: %w", rawTarget, err)
 			}
 			targets = append(targets, target)
+		}
+		for _, sink := range sinks {
+			if sink != nil {
+				*sink = append(*sink, targets...)
+			}
 		}
 		routeBalancer, err := newBalancer(targets)
 		if err != nil {

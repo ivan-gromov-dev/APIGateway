@@ -17,17 +17,27 @@ import (
 )
 
 type Config struct {
-	Server         HTTPServer     `yaml:"server"`
-	Admin          HTTPServer     `yaml:"admin"`
-	Log            Log            `yaml:"log"`
-	Middleware     Middleware     `yaml:"middleware"`
-	Retry          Retry          `yaml:"retry"`
-	Routes         []Route        `yaml:"routes"`
-	CircuitBreaker CircuitBreaker `yaml:"circuit_breaker"`
-	RateLimit      RateLimit      `yaml:"rate_limit"`
-	Auth           Auth           `yaml:"auth"`
-	Cache          Cache          `yaml:"cache"`
-	Telemetry      Telemetry      `yaml:"telemetry"`
+	Server            HTTPServer        `yaml:"server"`
+	Admin             HTTPServer        `yaml:"admin"`
+	Log               Log               `yaml:"log"`
+	Middleware        Middleware        `yaml:"middleware"`
+	Retry             Retry             `yaml:"retry"`
+	Routes            []Route           `yaml:"routes"`
+	CircuitBreaker    CircuitBreaker    `yaml:"circuit_breaker"`
+	ActiveHealthCheck ActiveHealthCheck `yaml:"active_health_check"`
+	RateLimit         RateLimit         `yaml:"rate_limit"`
+	Auth              Auth              `yaml:"auth"`
+	Cache             Cache             `yaml:"cache"`
+	Telemetry         Telemetry         `yaml:"telemetry"`
+}
+
+type ActiveHealthCheck struct {
+	Enabled            bool          `yaml:"enabled"`
+	Path               string        `yaml:"path"`
+	Interval           time.Duration `yaml:"interval"`
+	Timeout            time.Duration `yaml:"timeout"`
+	HealthyThreshold   int           `yaml:"healthy_threshold"`
+	UnhealthyThreshold int           `yaml:"unhealthy_threshold"`
 }
 
 type Telemetry struct {
@@ -209,6 +219,46 @@ type CircuitBreaker struct {
 	FailureStatuses  []int         `yaml:"failure_statuses"`
 }
 
+func (h *ActiveHealthCheck) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "enabled", "path", "interval", "timeout", "healthy_threshold", "unhealthy_threshold"); err != nil {
+		return err
+	}
+	var v struct {
+		Enabled            *bool  `yaml:"enabled"`
+		Path               string `yaml:"path"`
+		Interval           string `yaml:"interval"`
+		Timeout            string `yaml:"timeout"`
+		HealthyThreshold   int    `yaml:"healthy_threshold"`
+		UnhealthyThreshold int    `yaml:"unhealthy_threshold"`
+	}
+	if err := value.Decode(&v); err != nil {
+		return err
+	}
+	if v.Enabled != nil {
+		h.Enabled = *v.Enabled
+	}
+	if v.Path != "" {
+		h.Path = v.Path
+	}
+	h.HealthyThreshold = v.HealthyThreshold
+	h.UnhealthyThreshold = v.UnhealthyThreshold
+	if v.Interval != "" {
+		d, err := time.ParseDuration(v.Interval)
+		if err != nil {
+			return fmt.Errorf("interval: %w", err)
+		}
+		h.Interval = d
+	}
+	if v.Timeout != "" {
+		d, err := time.ParseDuration(v.Timeout)
+		if err != nil {
+			return fmt.Errorf("timeout: %w", err)
+		}
+		h.Timeout = d
+	}
+	return nil
+}
+
 func Load(path string) (Config, error) {
 	cfg := defaults()
 	data, err := os.ReadFile(path)
@@ -262,6 +312,7 @@ func defaults() Config {
 			OpenTimeout:      30 * time.Second,
 			FailureStatuses:  []int{502, 503, 504},
 		},
+		ActiveHealthCheck: ActiveHealthCheck{Path: "/healthz", Interval: 10 * time.Second, Timeout: 2 * time.Second, HealthyThreshold: 2, UnhealthyThreshold: 3},
 		RateLimit: RateLimit{
 			DefaultBackend: "redis", OnBackendError: "allow",
 			OperationTimeout: 100 * time.Millisecond,
@@ -301,6 +352,15 @@ func (c Config) Validate() error {
 	}
 	if c.CircuitBreaker.OpenTimeout <= 0 {
 		return errors.New("circuit breaker open_timeout must be positive")
+	}
+	if c.ActiveHealthCheck.Interval <= 0 || c.ActiveHealthCheck.Timeout <= 0 || c.ActiveHealthCheck.Timeout > c.ActiveHealthCheck.Interval {
+		return errors.New("active health check interval and timeout must be positive, with timeout no greater than interval")
+	}
+	if c.ActiveHealthCheck.Path == "" || !strings.HasPrefix(c.ActiveHealthCheck.Path, "/") {
+		return errors.New("active health check path must start with /")
+	}
+	if c.ActiveHealthCheck.HealthyThreshold <= 0 || c.ActiveHealthCheck.UnhealthyThreshold <= 0 {
+		return errors.New("active health check thresholds must be positive")
 	}
 	if err := validateStatuses("circuit breaker failure", c.CircuitBreaker.FailureStatuses); err != nil {
 		return err
