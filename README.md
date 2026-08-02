@@ -183,6 +183,27 @@ thresholds.
 
 ### External state and degradation policy
 
+Routes may opt into the first concrete discovery provider, DNS, instead of
+listing `upstreams` explicitly:
+
+```yaml
+  - path_prefix: /api/users/
+    discovery:
+      provider: dns
+      name: users
+      scheme: http
+      port: 8080
+      interval: 30s
+      grace: 2m
+```
+
+DNS resolution happens while preparing a new configuration snapshot. A failed
+lookup therefore leaves the last successfully published route snapshot serving
+traffic; readiness is not withdrawn for a discovery outage in this first
+version. Passive health still returns `503` when every retained instance is
+unavailable. `interval` and `grace` are accepted as the contract for the next
+step, which will refresh DNS without requiring a configuration-file change.
+
 Rate-limit counters and cached responses live in Redis, keeping behaviour
 consistent across gateway replicas. Atomic Token Bucket updates are performed
 server-side. Storage contracts are internal and replaceable by another

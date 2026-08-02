@@ -8,8 +8,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -42,6 +44,7 @@ type settings struct {
 	balancer     string
 	weights      []int
 	rollout      config.Rollout
+	discovery    bool
 	telemetry    *telemetry.Runtime
 }
 
@@ -104,6 +107,9 @@ func WithRouteBalancing(algorithm string, weights []int, rollout config.Rollout)
 		settings.balancer, settings.weights, settings.rollout = algorithm, append([]int(nil), weights...), rollout
 	}
 }
+
+// WithDNSDiscovery resolves the users route through localhost DNS.
+func WithDNSDiscovery() Option { return func(settings *settings) { settings.discovery = true } }
 
 // WithActiveHealthCheck enables active upstream probing for the scenario.
 func WithActiveHealthCheck(check config.ActiveHealthCheck) Option {
@@ -173,6 +179,18 @@ func New(t testing.TB, options ...Option) *Environment {
 			Weights:     cfg.weights,
 			Rollout:     cfg.rollout,
 		})
+		if cfg.discovery {
+			parsed, err := url.Parse(upstreams[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			port, err := strconv.Atoi(parsed.Port())
+			if err != nil {
+				t.Fatal(err)
+			}
+			routes[len(routes)-1].Upstreams = nil
+			routes[len(routes)-1].Discovery = &config.Discovery{Provider: "dns", Name: "127.0.0.1", Scheme: parsed.Scheme, Port: port}
+		}
 	}
 
 	publicAddress := freeAddress(t)
@@ -268,6 +286,16 @@ func (e *Environment) ReloadRoutes(upstreams ...string) error {
 func (e *Environment) ReloadBroken() error {
 	path := filepath.Join(e.t.TempDir(), "gateway.yaml")
 	if err := os.WriteFile(path, []byte("routes: ["), 0600); err != nil {
+		return err
+	}
+	return e.gateway.Reload(context.Background(), path)
+}
+
+// ReloadDiscoveryBroken attempts to publish a snapshot whose provider cannot resolve.
+func (e *Environment) ReloadDiscoveryBroken() error {
+	path := filepath.Join(e.t.TempDir(), "gateway.yaml")
+	contents := fmt.Sprintf("server:\n  address: %s\nadmin:\n  address: %s\nroutes:\n  - path_prefix: /api/\n    discovery:\n      provider: dns\n      name: does-not-exist.invalid\n      scheme: http\n      port: 8081\n      interval: 1s\n      grace: 1s\n    strip_prefix: true\n", e.config.Server.Address, e.config.Admin.Address)
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 		return err
 	}
 	return e.gateway.Reload(context.Background(), path)

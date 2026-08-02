@@ -46,18 +46,30 @@ services:
       dockerfile: deployments/backend.Dockerfile
     environment:
       SERVICE_NAME: backend-1
+    networks:
+      default:
+        aliases:
+          - users
   backend-2:
     build:
       context: .
       dockerfile: deployments/backend.Dockerfile
     environment:
       SERVICE_NAME: backend-2
+    networks:
+      default:
+        aliases:
+          - users
   backend-3:
     build:
       context: .
       dockerfile: deployments/backend.Dockerfile
     environment:
       SERVICE_NAME: backend-3
+    networks:
+      default:
+        aliases:
+          - users
   billing:
     build:
       context: .

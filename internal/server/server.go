@@ -17,6 +17,7 @@ import (
 	"github.com/Djunichi/APIGateway/internal/cache"
 	cacheredis "github.com/Djunichi/APIGateway/internal/cachestore/redis"
 	"github.com/Djunichi/APIGateway/internal/config"
+	"github.com/Djunichi/APIGateway/internal/discovery"
 	"github.com/Djunichi/APIGateway/internal/healthcheck"
 	"github.com/Djunichi/APIGateway/internal/metrics"
 	"github.com/Djunichi/APIGateway/internal/middleware"
@@ -107,7 +108,11 @@ func (s *Server) Run(ctx context.Context) (resultErr error) {
 	defer closeCache()
 	s.runtime = &runtimeState{telemetry: runtime, collector: collector, registry: registry, cacheStore: cacheStore, transport: runtime.HTTPClient, tracer: runtime.Tracer()}
 	var targets []*upstream.Target
-	handler, err := s.buildHandler(s.cfg, runtime, verifiers, &targets)
+	resolved, err := resolveDiscovery(ctx, s.cfg)
+	if err != nil {
+		return err
+	}
+	handler, err := s.buildHandler(resolved, runtime, verifiers, &targets)
 	if err != nil {
 		return err
 	}
@@ -175,6 +180,10 @@ func (s *Server) Reload(ctx context.Context, path string) error {
 		return errors.New("reload cannot change listener addresses")
 	}
 	runtime := s.runtime
+	cfg, err = resolveDiscovery(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("resolve discovery: %w", err)
+	}
 	verifiers, err := s.prepareAuthWithClient(ctx, runtime.transport)
 	if err != nil {
 		return err
@@ -190,6 +199,25 @@ func (s *Server) Reload(ctx context.Context, path string) error {
 	s.dynamic.Store(handler)
 	s.cfg = cfg
 	return nil
+}
+
+func resolveDiscovery(ctx context.Context, cfg config.Config) (config.Config, error) {
+	providers := discovery.DefaultRegistry()
+	for i := range cfg.Routes {
+		route := &cfg.Routes[i]
+		if route.Discovery == nil {
+			continue
+		}
+		upstreams, err := providers.Resolve(ctx, *route.Discovery)
+		if err != nil {
+			return config.Config{}, fmt.Errorf("route %d: %w", i, err)
+		}
+		route.Upstreams = upstreams
+		if len(route.Weights) != 0 && len(route.Weights) != len(route.Upstreams) {
+			return config.Config{}, fmt.Errorf("route %d: weights must match discovered upstreams", i)
+		}
+	}
+	return cfg, nil
 }
 
 func (s *Server) buildHandler(cfg config.Config, runtime *telemetry.Runtime, verifiers map[string]*auth.Verifier, targets *[]*upstream.Target) (http.Handler, error) {
