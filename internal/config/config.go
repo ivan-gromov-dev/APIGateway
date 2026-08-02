@@ -22,6 +22,7 @@ type Config struct {
 	Log               Log               `yaml:"log"`
 	Middleware        Middleware        `yaml:"middleware"`
 	Retry             Retry             `yaml:"retry"`
+	GRPC              GRPC              `yaml:"grpc"`
 	Routes            []Route           `yaml:"routes"`
 	CircuitBreaker    CircuitBreaker    `yaml:"circuit_breaker"`
 	ActiveHealthCheck ActiveHealthCheck `yaml:"active_health_check"`
@@ -155,6 +156,50 @@ type Retry struct {
 	PerAttemptTimeout time.Duration `yaml:"per_attempt_timeout"`
 	Backoff           time.Duration `yaml:"backoff"`
 	Statuses          []int         `yaml:"statuses"`
+}
+
+// GRPC configures the independent transparent gRPC proxy vertical. RPCs are
+// never passed through the HTTP retry policy; every call has one attempt.
+type GRPC struct {
+	Enabled bool        `yaml:"enabled"`
+	Routes  []GRPCRoute `yaml:"routes"`
+}
+
+type GRPCRoute struct {
+	PathPrefix string        `yaml:"path_prefix"`
+	Upstream   string        `yaml:"upstream"`
+	Timeout    time.Duration `yaml:"timeout"`
+}
+
+func (g *GRPC) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "enabled", "routes"); err != nil {
+		return err
+	}
+	type plain GRPC
+	return value.Decode((*plain)(g))
+}
+
+func (r *GRPCRoute) UnmarshalYAML(value *yaml.Node) error {
+	if err := rejectUnknownFields(value, "path_prefix", "upstream", "timeout"); err != nil {
+		return err
+	}
+	var raw struct {
+		PathPrefix string `yaml:"path_prefix"`
+		Upstream   string `yaml:"upstream"`
+		Timeout    string `yaml:"timeout"`
+	}
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+	r.PathPrefix, r.Upstream = raw.PathPrefix, raw.Upstream
+	if raw.Timeout != "" {
+		timeout, err := time.ParseDuration(raw.Timeout)
+		if err != nil {
+			return fmt.Errorf("timeout: %w", err)
+		}
+		r.Timeout = timeout
+	}
+	return nil
 }
 
 func (c *CORS) UnmarshalYAML(value *yaml.Node) error {
@@ -447,8 +492,28 @@ func (c Config) Validate() error {
 	if c.Log.Format != "json" && c.Log.Format != "text" {
 		return fmt.Errorf("log format must be json or text, got %q", c.Log.Format)
 	}
-	if len(c.Routes) == 0 {
-		return errors.New("at least one route is required")
+	if len(c.Routes) == 0 && (!c.GRPC.Enabled || len(c.GRPC.Routes) == 0) {
+		return errors.New("at least one HTTP or enabled gRPC route is required")
+	}
+	if !c.GRPC.Enabled && len(c.GRPC.Routes) != 0 {
+		return errors.New("grpc routes require grpc.enabled")
+	}
+	seenGRPC := make(map[string]struct{}, len(c.GRPC.Routes))
+	for i, route := range c.GRPC.Routes {
+		if !strings.HasPrefix(route.PathPrefix, "/") || !strings.HasSuffix(route.PathPrefix, "/") {
+			return fmt.Errorf("grpc route %d: path_prefix must start and end with /", i)
+		}
+		if _, exists := seenGRPC[route.PathPrefix]; exists {
+			return fmt.Errorf("grpc route %d: duplicate path_prefix %q", i, route.PathPrefix)
+		}
+		seenGRPC[route.PathPrefix] = struct{}{}
+		upstreamURL, err := url.Parse(route.Upstream)
+		if err != nil || (upstreamURL.Scheme != "http" && upstreamURL.Scheme != "https") || upstreamURL.Host == "" || upstreamURL.Path != "" {
+			return fmt.Errorf("grpc route %d: upstream must be an http(s) origin without a path", i)
+		}
+		if route.Timeout < 0 {
+			return fmt.Errorf("grpc route %d: timeout must not be negative", i)
+		}
 	}
 	seen := make(map[string]struct{}, len(c.Routes))
 	for i, route := range c.Routes {

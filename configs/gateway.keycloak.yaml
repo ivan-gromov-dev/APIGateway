@@ -22,6 +22,10 @@ retry:
   per_attempt_timeout: 2s
   backoff: 25ms
   statuses: [502, 503, 504]
+
+grpc:
+  enabled: false
+  routes: []
 circuit_breaker:
   failure_threshold: 5
   open_timeout: 30s
