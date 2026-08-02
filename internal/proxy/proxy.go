@@ -162,7 +162,29 @@ func handlerWithFeaturesAndObservability(
 				*sink = append(*sink, targets...)
 			}
 		}
-		routeBalancer, err := newBalancer(targets)
+		var routeBalancer balancer.Balancer
+		var err error
+		if route.Balancer == "weighted_round_robin" {
+			routeBalancer, err = balancer.NewWeightedRoundRobin(targets, route.Weights)
+		} else {
+			routeBalancer, err = newBalancer(targets)
+		}
+		if route.Rollout.Strategy != "" && len(targets) > 1 {
+			var primaryWeights []int
+			if route.Balancer == "weighted_round_robin" {
+				primaryWeights = route.Weights[:len(route.Weights)-1]
+			} else {
+				primaryWeights = make([]int, len(targets)-1)
+				for i := range primaryWeights {
+					primaryWeights[i] = 1
+				}
+			}
+			primary, primaryErr := balancer.NewWeightedRoundRobin(targets[:len(targets)-1], primaryWeights)
+			if primaryErr != nil {
+				return nil, fmt.Errorf("create rollout balancer for route %q: %w", route.PathPrefix, primaryErr)
+			}
+			routeBalancer = balancer.NewRollout(primary, targets[len(targets)-1], route.Rollout)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("create balancer for route %q: %w", route.PathPrefix, err)
 		}

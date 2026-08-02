@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	"context"
 	"net/url"
 	"sync"
 	"sync/atomic"
@@ -30,7 +31,7 @@ func TestRoundRobinCyclesInOrder(t *testing.T) {
 
 	want := []string{"first", "second", "third", "first", "second", "third"}
 	for i, expected := range want {
-		selection, ok := balancer.Next(time.Time{})
+		selection, ok := balancer.Next(context.Background(), time.Time{})
 		if !ok {
 			t.Fatalf("selection %d unavailable", i)
 		}
@@ -50,7 +51,7 @@ func TestRoundRobinSkipsOpenTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	selection, ok := balancer.Next(time.Time{})
+	selection, ok := balancer.Next(context.Background(), time.Time{})
 	if !ok || selection.Target.URL().Host != "second" {
 		t.Fatalf("selection = %+v available=%v, want second", selection, ok)
 	}
@@ -67,7 +68,7 @@ func TestRoundRobinReportsNoAvailableTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if selection, ok := balancer.Next(time.Time{}); ok || selection.Target != nil || selection.Done != nil {
+	if selection, ok := balancer.Next(context.Background(), time.Time{}); ok || selection.Target != nil || selection.Done != nil {
 		t.Fatalf("selection = %+v available=%v", selection, ok)
 	}
 }
@@ -81,7 +82,7 @@ func TestRoundRobinCopiesInput(t *testing.T) {
 	}
 	targets[0] = newTarget(t, "mutated", 1)
 
-	selection, ok := balancer.Next(time.Time{})
+	selection, ok := balancer.Next(context.Background(), time.Time{})
 	if !ok || selection.Target != first {
 		t.Fatal("caller mutation changed balancer targets")
 	}
@@ -101,7 +102,7 @@ func TestRoundRobinIsSafeForConcurrentUse(t *testing.T) {
 	for range requests {
 		go func() {
 			defer waitGroup.Done()
-			selection, ok := balancer.Next(time.Time{})
+			selection, ok := balancer.Next(context.Background(), time.Time{})
 			if !ok {
 				t.Error("target unavailable")
 				return

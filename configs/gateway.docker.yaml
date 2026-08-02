@@ -99,6 +99,12 @@ routes:
       - http://backend-2:8081
       - http://backend-3:8081
     strip_prefix: true
+    balancer: weighted_round_robin
+    weights: [9, 1, 1]
+    rollout:
+      strategy: stable_hash
+      percentage: 10
+      stable_hash: X-User-ID
     auth:
       required: true
       provider: demo

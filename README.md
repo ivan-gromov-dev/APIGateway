@@ -16,6 +16,7 @@ shutdown lifecycle are all visible in application code.
 
 - prefix routing with longest-prefix precedence and optional prefix stripping;
 - concurrent per-route Round Robin balancing across multiple upstreams;
+- per-route weighted round robin and controlled percentage/header/stable-hash rollouts;
 - retries restricted to safe, replayable requests;
 - passive upstream health tracking with a circuit breaker per instance;
 - configurable active HTTP health checks for each upstream instance;
@@ -136,6 +137,24 @@ Routes are ordered by prefix specificity, not YAML order. Every route owns its
 balancer, so upstream rotation and health state do not leak between services.
 The balancer is behind a small consumer-defined interface; additional
 algorithms can be introduced without coupling routing to a concrete strategy.
+
+Routes select the algorithm explicitly with `balancer`; it defaults to
+`round_robin`. Positive `weights` are accepted only when
+`balancer: weighted_round_robin` is selected.
+For gradual rollout, `rollout` treats the final upstream as the canary:
+
+```yaml
+    balancer: weighted_round_robin
+    weights: [3, 1]
+    rollout:
+      strategy: stable_hash
+      percentage: 10
+      stable_hash: X-User-ID
+```
+
+`percentage` hashes `X-Request-ID`, `header` selects the canary when its header
+is present, and `stable_hash` hashes the named header. Percentages and metric
+labels are bounded; an unavailable canary falls back to the primary pool.
 
 ### Safe retries
 

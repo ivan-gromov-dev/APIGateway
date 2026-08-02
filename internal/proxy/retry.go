@@ -164,7 +164,7 @@ func (t *retryTransport) attemptRequest(
 		}
 		request.Body = body
 	}
-	selection, available := t.balancer.Next(time.Now())
+	selection, available := t.balancer.Next(balancer.WithRequest(original.Context(), original), time.Now())
 	if !available {
 		cancel()
 		return nil, func() {}, nil, errNoAvailableUpstream

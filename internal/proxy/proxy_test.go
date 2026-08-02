@@ -15,9 +15,40 @@ import (
 	"github.com/Djunichi/APIGateway/internal/balancer"
 	"github.com/Djunichi/APIGateway/internal/circuitbreaker"
 	"github.com/Djunichi/APIGateway/internal/config"
+	"github.com/Djunichi/APIGateway/internal/metrics"
 	"github.com/Djunichi/APIGateway/internal/ratelimit"
 	upstreammodel "github.com/Djunichi/APIGateway/internal/upstream"
 )
+
+func TestHandlerObservabilityConstructors(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	routes := []config.Route{{PathPrefix: "/api/", Upstreams: []string{upstream.URL}}}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	for name, build := range map[string]func() (http.Handler, error){
+		"telemetry": func() (http.Handler, error) {
+			return HandlerWithTelemetry(routes, testRetry(), testCircuit(), config.RateLimit{}, nil, nil, config.Cache{}, nil, logger, http.DefaultTransport, nil)
+		},
+		"observability": func() (http.Handler, error) {
+			return HandlerWithObservability(routes, testRetry(), testCircuit(), config.RateLimit{}, nil, nil, config.Cache{}, nil, logger, http.DefaultTransport, nil, &metrics.Collector{})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			handler, err := build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/", nil))
+			if response.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want %d", response.Code, http.StatusNoContent)
+			}
+		})
+	}
+}
 
 func TestHandlerProxiesAndStripsPrefix(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -360,7 +391,7 @@ func newFixedBalancer(t *testing.T, targetURL *url.URL) *fixedBalancer {
 	return &fixedBalancer{target: target}
 }
 
-func (b *fixedBalancer) Next(now time.Time) (balancer.Selection, bool) {
+func (b *fixedBalancer) Next(_ context.Context, now time.Time) (balancer.Selection, bool) {
 	done, allowed := b.target.Acquire(now)
 	return balancer.Selection{Target: b.target, Done: done}, allowed
 }

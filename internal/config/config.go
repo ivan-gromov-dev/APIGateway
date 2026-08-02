@@ -168,10 +168,22 @@ func (c *CORS) UnmarshalYAML(value *yaml.Node) error {
 type Route struct {
 	PathPrefix  string          `yaml:"path_prefix"`
 	Upstreams   []string        `yaml:"upstreams"`
+	Balancer    string          `yaml:"balancer"`
+	Weights     []int           `yaml:"weights"`
+	Rollout     Rollout         `yaml:"rollout"`
 	StripPrefix bool            `yaml:"strip_prefix"`
 	RateLimits  []RateLimitRule `yaml:"rate_limits"`
 	Auth        RouteAuth       `yaml:"auth"`
 	Cache       RouteCache      `yaml:"cache"`
+}
+
+// Rollout controls gradual exposure of the final upstream in a route. The
+// selector is deliberately bounded to request metadata, never raw paths.
+type Rollout struct {
+	Strategy   string `yaml:"strategy"`
+	Percentage int    `yaml:"percentage"`
+	Header     string `yaml:"header"`
+	StableHash string `yaml:"stable_hash"`
 }
 
 type Auth struct {
@@ -436,6 +448,35 @@ func (c Config) Validate() error {
 		seen[route.PathPrefix] = struct{}{}
 		if len(route.Upstreams) == 0 {
 			return fmt.Errorf("route %d: at least one upstream is required", i)
+		}
+		if route.Balancer == "" {
+			route.Balancer = "round_robin"
+		}
+		if route.Balancer != "round_robin" && route.Balancer != "weighted_round_robin" {
+			return fmt.Errorf("route %d: balancer must be round_robin or weighted_round_robin", i)
+		}
+		if route.Balancer == "weighted_round_robin" && len(route.Weights) == 0 {
+			return fmt.Errorf("route %d: weighted_round_robin requires weights", i)
+		}
+		if route.Balancer == "round_robin" && len(route.Weights) > 0 {
+			return fmt.Errorf("route %d: weights require weighted_round_robin", i)
+		}
+		if len(route.Weights) != 0 && len(route.Weights) != len(route.Upstreams) {
+			return fmt.Errorf("route %d: weights must match upstreams", i)
+		}
+		for _, weight := range route.Weights {
+			if weight <= 0 {
+				return fmt.Errorf("route %d: weights must be positive", i)
+			}
+		}
+		if route.Rollout.Strategy != "" && route.Rollout.Strategy != "percentage" && route.Rollout.Strategy != "header" && route.Rollout.Strategy != "stable_hash" {
+			return fmt.Errorf("route %d: rollout strategy must be percentage, header, or stable_hash", i)
+		}
+		if route.Rollout.Percentage < 0 || route.Rollout.Percentage > 100 {
+			return fmt.Errorf("route %d: rollout percentage must be between 0 and 100", i)
+		}
+		if route.Rollout.Strategy == "header" && route.Rollout.Header == "" || route.Rollout.Strategy == "stable_hash" && route.Rollout.StableHash == "" {
+			return fmt.Errorf("route %d: rollout selector is required", i)
 		}
 		seenUpstreams := make(map[string]struct{}, len(route.Upstreams))
 		for j, rawUpstream := range route.Upstreams {
