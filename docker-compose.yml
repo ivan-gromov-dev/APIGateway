@@ -17,6 +17,8 @@ services:
         condition: service_started
       billing:
         condition: service_started
+      grpc-health:
+        condition: service_started
   redis:
     image: redis:8.2.3-alpine
     command: ["redis-server", "--save", "", "--appendonly", "no"]
@@ -76,3 +78,7 @@ services:
       dockerfile: deployments/billing.Dockerfile
     environment:
       SERVICE_NAME: billing-service
+  grpc-health:
+    build:
+      context: .
+      dockerfile: deployments/grpc-health.Dockerfile
