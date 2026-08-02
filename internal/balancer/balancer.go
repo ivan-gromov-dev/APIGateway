@@ -2,6 +2,7 @@
 package balancer
 
 import (
+	"context"
 	"time"
 
 	"github.com/Djunichi/APIGateway/internal/circuitbreaker"
@@ -16,7 +17,7 @@ type Selection struct {
 
 // Balancer selects an available upstream for the next attempt.
 type Balancer interface {
-	Next(now time.Time) (Selection, bool)
+	Next(ctx context.Context, now time.Time) (Selection, bool)
 }
 
 // Factory creates an independent balancer for a route.

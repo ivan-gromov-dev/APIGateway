@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	"context"
 	"errors"
 	"sync/atomic"
 	"time"
@@ -23,7 +24,7 @@ func NewRoundRobin(upstreams []*upstream.Target) (*RoundRobin, error) {
 }
 
 // Next returns the next available upstream in rotation.
-func (r *RoundRobin) Next(now time.Time) (Selection, bool) {
+func (r *RoundRobin) Next(_ context.Context, now time.Time) (Selection, bool) {
 	index := r.next.Add(1) - 1
 	for offset := range uint64(len(r.upstreams)) {
 		target := r.upstreams[(index+offset)%uint64(len(r.upstreams))]

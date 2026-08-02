@@ -39,6 +39,9 @@ type settings struct {
 	cache        config.Cache
 	routeCache   config.RouteCache
 	cacheStore   cache.Store
+	balancer     string
+	weights      []int
+	rollout      config.Rollout
 	telemetry    *telemetry.Runtime
 }
 
@@ -92,6 +95,13 @@ func WithUserStatuses(instance int, statuses ...int) Option {
 func WithUsers(count int) Option {
 	return func(settings *settings) {
 		settings.users = count
+	}
+}
+
+// WithRouteBalancing configures the users route's explicit balancing policy.
+func WithRouteBalancing(algorithm string, weights []int, rollout config.Rollout) Option {
+	return func(settings *settings) {
+		settings.balancer, settings.weights, settings.rollout = algorithm, append([]int(nil), weights...), rollout
 	}
 }
 
@@ -159,6 +169,9 @@ func New(t testing.TB, options ...Option) *Environment {
 			StripPrefix: true,
 			Auth:        cfg.routeAuth,
 			Cache:       cfg.routeCache,
+			Balancer:    cfg.balancer,
+			Weights:     cfg.weights,
+			Rollout:     cfg.rollout,
 		})
 	}
 

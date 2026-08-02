@@ -360,7 +360,7 @@ func newFixedBalancer(t *testing.T, targetURL *url.URL) *fixedBalancer {
 	return &fixedBalancer{target: target}
 }
 
-func (b *fixedBalancer) Next(now time.Time) (balancer.Selection, bool) {
+func (b *fixedBalancer) Next(_ context.Context, now time.Time) (balancer.Selection, bool) {
 	done, allowed := b.target.Acquire(now)
 	return balancer.Selection{Target: b.target, Done: done}, allowed
 }
