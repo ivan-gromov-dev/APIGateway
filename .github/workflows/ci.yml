@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches:
+      - master
   pull_request:
 
 permissions:
@@ -84,3 +86,25 @@ jobs:
       - run: go mod download
       - name: Run integration tests
         run: go test -race -count=1 ./test/integration/...
+
+  ci-success:
+    name: CI Success
+    if: ${{ always() }}
+    needs:
+      - build
+      - unit-tests
+      - integration-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs passed
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          UNIT_TESTS_RESULT: ${{ needs.unit-tests.result }}
+          INTEGRATION_TESTS_RESULT: ${{ needs.integration-tests.result }}
+        run: |
+          set -eu
+          printf 'build: %s\nunit-tests: %s\nintegration-tests: %s\n' \
+            "$BUILD_RESULT" "$UNIT_TESTS_RESULT" "$INTEGRATION_TESTS_RESULT"
+          test "$BUILD_RESULT" = success
+          test "$UNIT_TESTS_RESULT" = success
+          test "$INTEGRATION_TESTS_RESULT" = success

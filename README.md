@@ -18,6 +18,7 @@ shutdown lifecycle are all visible in application code.
 - concurrent per-route Round Robin balancing across multiple upstreams;
 - retries restricted to safe, replayable requests;
 - passive upstream health tracking with a circuit breaker per instance;
+- configurable active HTTP health checks for each upstream instance;
 - global and per-route Redis-backed Token Bucket rate limiting;
 - route-level JWT validation against external JWKS providers;
 - Redis-backed response caching with authorization and privacy safeguards;
@@ -154,6 +155,12 @@ responses and transport failures count against that instance; client
 cancellation does not. Open instances are skipped until their timeout permits a
 probe. If every instance is unavailable, the gateway returns `503 Service
 Unavailable` instead of selecting a known-unhealthy destination.
+
+Active checks probe each upstream's `/healthz` endpoint every 10 seconds with a
+2-second timeout. HTTP 2xx–3xx responses count as healthy; three consecutive
+failures mark an instance unavailable, while two consecutive successes recover
+it. Configure `active_health_check` to change the path, cadence, timeout, or
+thresholds.
 
 ### External state and degradation policy
 

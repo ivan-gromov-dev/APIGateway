@@ -79,6 +79,20 @@ func (b *Breaker) Snapshot() Snapshot {
 	}
 }
 
+// SetHealth applies an externally observed health result, including recovery
+// from an open circuit. It is safe for concurrent use.
+func (b *Breaker) SetHealth(healthy bool, at time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if healthy {
+		b.state, b.consecutiveFailures, b.openedAt = StateClosed, 0, time.Time{}
+		b.generation++
+		return
+	}
+	b.consecutiveFailures = b.failureThreshold
+	b.open(at)
+}
+
 func (b *Breaker) doneFunc(generation uint64) DoneFunc {
 	var once sync.Once
 	return func(outcome Outcome, completedAt time.Time) {
