@@ -17,6 +17,7 @@ func TestCollectorExposesGatewayMetrics(t *testing.T) {
 	collector.ObserveProxyAttempt("/api/", "backend-1:8081", "failure", 50*time.Millisecond)
 	collector.ObserveRetry("/api/", "status")
 	collector.ObserveFeature("cache", "/api/", "", "hit")
+	collector.ObserveDiscovery("/api/", "stale", 2, 3*time.Second)
 
 	response := httptest.NewRecorder()
 	collector.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -27,6 +28,9 @@ func TestCollectorExposesGatewayMetrics(t *testing.T) {
 		`gateway_proxy_attempts_total{outcome="failure",route="/api/",upstream="backend-1:8081"} 1`,
 		`gateway_proxy_retries_total{reason="status",route="/api/"} 1`,
 		`gateway_feature_decisions_total{feature="cache",name="",result="hit",scope="/api/"} 1`,
+		`gateway_discovery_refresh_total{outcome="stale",route="/api/"} 1`,
+		`gateway_discovery_targets{route="/api/"} 2`,
+		`gateway_discovery_staleness_seconds{route="/api/"} 3`,
 		`gateway_http_requests_in_flight 0`,
 		`go_goroutines`, `process_cpu_seconds_total`,
 	} {

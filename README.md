@@ -1,6 +1,7 @@
 # API Gateway
 
 [![CI](https://github.com/Djunichi/APIGateway/actions/workflows/ci.yml/badge.svg)](https://github.com/Djunichi/APIGateway/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A production-minded HTTP API gateway written in Go. It combines reverse
 proxying, resilience, authentication, distributed rate limiting, response
@@ -15,6 +16,7 @@ shutdown lifecycle are all visible in application code.
 ## What is included
 
 - prefix routing with longest-prefix precedence and optional prefix stripping;
+- continuously refreshed DNS discovery with bounded stale retention;
 - concurrent per-route Round Robin balancing across multiple upstreams;
 - per-route weighted round robin and controlled percentage/header/stable-hash rollouts;
 - retries restricted to safe, replayable requests;
@@ -268,12 +270,37 @@ listing `upstreams` explicitly:
       grace: 2m
 ```
 
-DNS resolution happens while preparing a new configuration snapshot. A failed
-lookup therefore leaves the last successfully published route snapshot serving
-traffic; readiness is not withdrawn for a discovery outage in this first
-version. Passive health still returns `503` when every retained instance is
-unavailable. `interval` and `grace` are accepted as the contract for the next
-step, which will refresh DNS without requiring a configuration-file change.
+DNS routes refresh independently of configuration-file polling at their
+configured `interval`. Successful answers are deduplicated and sorted before a
+new immutable routing snapshot is published. Added and removed instances are
+reconciled while unchanged targets retain their circuit-breaker and active-health
+state.
+
+When resolution fails or returns no usable addresses, the last successful set
+continues serving for `grace`. Refresh metrics report a bounded `success`,
+`stale`, `expired`, or `error` outcome. After grace expires, that route returns
+`503 Service Unavailable` and `/readyz` returns `503`; another successful answer
+atomically restores the route and readiness. Configuration reload and process
+shutdown cancel the retired refresh workers and active probes.
+
+Use `round_robin` for DNS sets whose membership can change. Positional
+`weights` remain supported when discovery returns the same number of targets;
+a cardinality mismatch is treated as an invalid refresh and follows the same
+stale/grace policy rather than silently assigning weights to different IPs.
+
+The Compose stack exposes three containers through the `users` DNS alias. To
+observe membership reconciliation manually, stop one instance, wait for the
+configured refresh interval, and then start it again:
+
+```powershell
+docker compose stop backend-3
+Start-Sleep -Seconds 35
+docker compose start backend-3
+```
+
+Authenticated requests continue through the remaining instances during the
+change. This is a local demonstration; production DNS TTL and negative-caching
+behaviour remain properties of the configured resolver.
 
 Rate-limit counters and cached responses live in Redis, keeping behaviour
 consistent across gateway replicas. Atomic Token Bucket updates are performed
@@ -400,10 +427,11 @@ The admin server listens on `:9090` by default:
 | `GET /debug/pprof/` | Go runtime profiling |
 
 Metrics cover request rate, status, latency, response size, in-flight requests,
-routes, upstream attempts, retries, gRPC status/duration, auth, cache and rate-limit decisions, plus
-Go runtime and process state. Labels are bounded: raw paths, request IDs,
-subjects, and tokens are never used as metric labels. Logs and traces share
-`trace_id` and `span_id` for correlation.
+routes, upstream attempts, retries, gRPC status/duration, discovery refresh
+outcome/target count/staleness, auth, cache and rate-limit decisions, plus Go
+runtime and process state. Labels are bounded: raw paths, discovered addresses,
+request IDs, subjects, and tokens are never used as metric labels. Logs and
+traces share `trace_id` and `span_id` for correlation.
 
 ## Why build this instead of configuring an existing proxy?
 
@@ -494,13 +522,12 @@ boundaries and validation rules as human contributions.
 
 ## Current boundaries and roadmap
 
-Version 1.0 is an HTTP/1.1 and HTTP/2 application gateway with transactional
-YAML reload, static and DNS-backed upstream discovery, multiple balancing and
-rollout strategies, and passive/active health tracking.
+Version 1.1 is an HTTP/1.1 and HTTP/2 application gateway with transactional
+YAML reload, static and continuously refreshed DNS-backed discovery, multiple
+balancing and rollout strategies, and passive/active health tracking.
 
-The next milestone focuses on continuous DNS refresh using the existing
-`interval` and `grace` contract, followed by resilience budgets, overload
-protection, release hardening, and carefully bounded discovery integrations.
+The next milestone focuses on resilience budgets and overload protection,
+followed by release hardening and carefully bounded discovery integrations.
 See the [project roadmap](ROADMAP.md) for ordered milestones and completion
 criteria.
 
@@ -514,3 +541,7 @@ Demo client secrets, the Grafana password, disabled Elastic security, and the
 Filebeat Docker socket mount are for local development only. Do not expose the
 Compose stack to an untrusted network or reuse its credentials in another
 environment.
+
+## License
+
+This project is available under the [MIT License](LICENSE).

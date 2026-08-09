@@ -20,7 +20,6 @@ import (
 	"github.com/Djunichi/APIGateway/internal/config"
 	"github.com/Djunichi/APIGateway/internal/discovery"
 	"github.com/Djunichi/APIGateway/internal/grpcproxy"
-	"github.com/Djunichi/APIGateway/internal/healthcheck"
 	"github.com/Djunichi/APIGateway/internal/metrics"
 	"github.com/Djunichi/APIGateway/internal/middleware"
 	"github.com/Djunichi/APIGateway/internal/proxy"
@@ -34,15 +33,22 @@ import (
 )
 
 type Server struct {
-	cfg          config.Config
-	logger       *slog.Logger
-	ready        atomic.Bool
-	rateRegistry *ratelimit.Registry
-	cacheStore   cache.Store
-	telemetry    *telemetry.Runtime
-	reloadMu     sync.Mutex
-	runtime      *runtimeState
-	dynamic      *dynamicHandler
+	cfg              config.Config
+	logger           *slog.Logger
+	ready            atomic.Bool
+	discoveryOK      atomic.Bool
+	rateRegistry     *ratelimit.Registry
+	cacheStore       cache.Store
+	telemetry        *telemetry.Runtime
+	reloadMu         sync.Mutex
+	runtime          *runtimeState
+	dynamic          *dynamicHandler
+	providers        discovery.Registry
+	targets          map[string]*upstream.Target
+	discoveryCancel  context.CancelFunc
+	healthCancel     context.CancelFunc
+	runCtx           context.Context
+	discoveryExpired map[int]bool
 }
 
 type runtimeState struct {
@@ -54,12 +60,21 @@ type runtimeState struct {
 	tracer     trace.Tracer
 }
 
-type dynamicHandler struct{ value atomic.Value }
+type dynamicHandler struct{ value, expired atomic.Value }
 
 func (h *dynamicHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if prefixes, ok := h.expired.Load().(map[string]bool); ok {
+		for prefix := range prefixes {
+			if strings.HasPrefix(r.URL.Path, prefix) {
+				http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+				return
+			}
+		}
+	}
 	h.value.Load().(http.Handler).ServeHTTP(w, r)
 }
-func (h *dynamicHandler) Store(next http.Handler) { h.value.Store(next) }
+func (h *dynamicHandler) Store(next http.Handler)               { h.value.Store(next) }
+func (h *dynamicHandler) StoreExpired(prefixes map[string]bool) { h.expired.Store(prefixes) }
 
 type Option func(*Server)
 
@@ -75,8 +90,14 @@ func WithTelemetry(runtime *telemetry.Runtime) Option {
 	return func(server *Server) { server.telemetry = runtime }
 }
 
+// WithDiscoveryRegistry replaces built-in providers for deterministic tests or embedding.
+func WithDiscoveryRegistry(registry discovery.Registry) Option {
+	return func(server *Server) { server.providers = registry }
+}
+
 func New(cfg config.Config, logger *slog.Logger, options ...Option) *Server {
-	server := &Server{cfg: cfg, logger: logger}
+	server := &Server{cfg: cfg, logger: logger, providers: discovery.DefaultRegistry()}
+	server.discoveryOK.Store(true)
 	for _, option := range options {
 		option(server)
 	}
@@ -84,13 +105,16 @@ func New(cfg config.Config, logger *slog.Logger, options ...Option) *Server {
 }
 
 func (s *Server) Run(ctx context.Context) (resultErr error) {
+	s.runCtx = ctx
+	shutdownTimeout := s.cfg.Server.ShutdownTimeout
+	telemetryShutdownTimeout := s.cfg.Telemetry.Tracing.ShutdownTimeout
 	runtime, owned, err := s.prepareTelemetry(ctx)
 	if err != nil {
 		return err
 	}
 	if owned {
 		defer func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.Telemetry.Tracing.ShutdownTimeout)
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), telemetryShutdownTimeout)
 			defer cancel()
 			resultErr = errors.Join(resultErr, runtime.Shutdown(shutdownCtx))
 		}()
@@ -111,24 +135,26 @@ func (s *Server) Run(ctx context.Context) (resultErr error) {
 	}
 	defer closeCache()
 	s.runtime = &runtimeState{telemetry: runtime, collector: collector, registry: registry, cacheStore: cacheStore, transport: runtime.HTTPClient, tracer: runtime.Tracer()}
-	var targets []*upstream.Target
-	resolved, err := resolveDiscovery(ctx, s.cfg)
+	resolved, err := s.resolveDiscovery(ctx, s.cfg)
 	if err != nil {
 		return err
 	}
-	handler, err := s.buildHandler(resolved, runtime, verifiers, &targets)
+	observeResolvedDiscovery(collector, resolved)
+	handler, pool, err := s.buildHandlerWithPool(resolved, runtime, verifiers, nil)
 	if err != nil {
 		return err
 	}
 	dynamic := &dynamicHandler{}
 	dynamic.Store(handler)
+	dynamic.StoreExpired(map[string]bool{})
 	s.dynamic = dynamic
-	checkCtx, stopChecks := context.WithCancel(ctx)
-	defer stopChecks()
-	go healthcheck.New(targets, s.cfg.ActiveHealthCheck, runtime.HTTPClient(s.cfg.ActiveHealthCheck.Timeout)).Run(checkCtx)
+	s.cfg = resolved
+	s.targets = pool
+	s.startHealthChecks(ctx)
+	defer s.stopRuntimeWorkers()
 
-	app := publicHTTPServer(s.cfg, dynamic)
-	admin := httpServer(s.cfg.Admin, adminHandler(collector, &s.ready))
+	app := publicHTTPServer(resolved, dynamic)
+	admin := httpServer(resolved.Admin, adminHandler(collector, &s.ready, &s.discoveryOK))
 
 	appListener, err := net.Listen("tcp", app.Addr)
 	if err != nil {
@@ -142,6 +168,7 @@ func (s *Server) Run(ctx context.Context) (resultErr error) {
 
 	results := make(chan error, 2)
 	s.ready.Store(true)
+	s.startDiscovery(ctx, verifiers)
 	go serve("public", app, appListener, results)
 	go serve("admin", admin, adminListener, results)
 
@@ -154,7 +181,7 @@ func (s *Server) Run(ctx context.Context) (resultErr error) {
 	}
 
 	s.ready.Store(false)
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.Server.ShutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	shutdownErr := shutdownAll(shutdownCtx, app, admin)
 
@@ -187,16 +214,16 @@ func (s *Server) Reload(ctx context.Context, path string) error {
 		return errors.New("reload cannot change grpc.enabled")
 	}
 	runtime := s.runtime
-	cfg, err = resolveDiscovery(ctx, cfg)
+	cfg, err = s.resolveDiscovery(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("resolve discovery: %w", err)
 	}
+	observeResolvedDiscovery(runtime.collector, cfg)
 	verifiers, err := s.prepareAuthWithClient(ctx, runtime.transport)
 	if err != nil {
 		return err
 	}
-	var targets []*upstream.Target
-	handler, err := s.buildHandler(cfg, runtime.telemetry, verifiers, &targets)
+	handler, pool, err := s.buildHandlerWithPool(cfg, runtime.telemetry, verifiers, s.targets)
 	if err != nil {
 		return err
 	}
@@ -205,17 +232,28 @@ func (s *Server) Reload(ctx context.Context, path string) error {
 	}
 	s.dynamic.Store(handler)
 	s.cfg = cfg
+	s.targets = pool
+	s.startHealthChecks(ctx)
+	s.startDiscovery(ctx, verifiers)
+	s.discoveryOK.Store(true)
 	return nil
 }
 
-func resolveDiscovery(ctx context.Context, cfg config.Config) (config.Config, error) {
-	providers := discovery.DefaultRegistry()
+func observeResolvedDiscovery(collector *metrics.Collector, cfg config.Config) {
+	for _, route := range cfg.Routes {
+		if route.Discovery != nil {
+			collector.ObserveDiscovery(route.PathPrefix, "success", len(route.Upstreams), 0)
+		}
+	}
+}
+
+func (s *Server) resolveDiscovery(ctx context.Context, cfg config.Config) (config.Config, error) {
 	for i := range cfg.Routes {
 		route := &cfg.Routes[i]
 		if route.Discovery == nil {
 			continue
 		}
-		upstreams, err := providers.Resolve(ctx, *route.Discovery)
+		upstreams, err := s.providers.Resolve(ctx, *route.Discovery)
 		if err != nil {
 			return config.Config{}, fmt.Errorf("route %d: %w", i, err)
 		}
@@ -227,11 +265,29 @@ func resolveDiscovery(ctx context.Context, cfg config.Config) (config.Config, er
 	return cfg, nil
 }
 
+// resolveDiscovery retains the package-level helper used by focused tests.
+func resolveDiscovery(ctx context.Context, cfg config.Config) (config.Config, error) {
+	return (&Server{providers: discovery.DefaultRegistry()}).resolveDiscovery(ctx, cfg)
+}
+
+func (s *Server) buildHandlerWithPool(cfg config.Config, runtime *telemetry.Runtime, verifiers map[string]*auth.Verifier, previous map[string]*upstream.Target) (http.Handler, map[string]*upstream.Target, error) {
+	proxyHandler, pool, err := proxy.HandlerWithObservabilityAndTargetPool(cfg.Routes, cfg.Retry, cfg.CircuitBreaker, cfg.RateLimit, s.runtime.registry, verifiers, cfg.Cache, s.runtime.cacheStore, s.logger, runtime.Transport(http.DefaultTransport), runtime.Tracer(), s.runtime.collector, previous)
+	if err != nil {
+		return nil, nil, err
+	}
+	handler, err := s.composeHandler(cfg, runtime, verifiers, proxyHandler)
+	return handler, pool, err
+}
+
 func (s *Server) buildHandler(cfg config.Config, runtime *telemetry.Runtime, verifiers map[string]*auth.Verifier, targets *[]*upstream.Target) (http.Handler, error) {
 	proxyHandler, err := proxy.HandlerWithObservabilityAndTargets(cfg.Routes, cfg.Retry, cfg.CircuitBreaker, cfg.RateLimit, s.runtime.registry, verifiers, cfg.Cache, s.runtime.cacheStore, s.logger, runtime.Transport(http.DefaultTransport), runtime.Tracer(), s.runtime.collector, targets)
 	if err != nil {
 		return nil, err
 	}
+	return s.composeHandler(cfg, runtime, verifiers, proxyHandler)
+}
+
+func (s *Server) composeHandler(cfg config.Config, runtime *telemetry.Runtime, verifiers map[string]*auth.Verifier, proxyHandler http.Handler) (http.Handler, error) {
 	global, err := middleware.BuildRateLimitWithMetrics(cfg.RateLimit.Rules, cfg.RateLimit, s.runtime.registry, s.runtime.collector, "global")
 	if err != nil {
 		return nil, fmt.Errorf("build global rate limit: %w", err)
@@ -417,10 +473,15 @@ func shutdownAll(ctx context.Context, servers ...*http.Server) error {
 	return errors.Join(errs...)
 }
 
-func adminHandler(collector *metrics.Collector, ready *atomic.Bool) http.Handler {
+func adminHandler(collector *metrics.Collector, ready *atomic.Bool, discoveryState ...*atomic.Bool) http.Handler {
+	discoveryOK := &atomic.Bool{}
+	discoveryOK.Store(true)
+	if len(discoveryState) > 0 && discoveryState[0] != nil {
+		discoveryOK = discoveryState[0]
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", ok)
-	mux.HandleFunc("GET /readyz", readinessHandler(ready))
+	mux.HandleFunc("GET /readyz", readinessHandler(ready, discoveryOK))
 	mux.Handle("GET /metrics", collector)
 	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
 	mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
@@ -430,9 +491,9 @@ func adminHandler(collector *metrics.Collector, ready *atomic.Bool) http.Handler
 	return mux
 }
 
-func readinessHandler(ready *atomic.Bool) http.HandlerFunc {
+func readinessHandler(ready, discoveryOK *atomic.Bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
-		if !ready.Load() {
+		if !ready.Load() || !discoveryOK.Load() {
 			writeStatus(w, http.StatusServiceUnavailable, "not_ready")
 			return
 		}

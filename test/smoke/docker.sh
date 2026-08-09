@@ -15,6 +15,9 @@ grep -qi '^x-cache: HIT' "$second_headers"
 token="$(curl --fail --silent --show-error -u gateway-demo:gateway-demo-secret -d grant_type=client_credentials -d scope=users.read http://localhost:8084/token | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')"
 test -n "$token"
 curl --fail --silent --show-error -H "Authorization: Bearer $token" -H 'X-User-ID: smoke-user' "$base_url/api/users" >/dev/null
-curl --fail --silent --show-error "$admin_url/metrics" | grep -q gateway_feature_decisions_total
+metrics="$(curl --fail --silent --show-error "$admin_url/metrics")"
+printf '%s' "$metrics" | grep -q gateway_feature_decisions_total
+printf '%s' "$metrics" | grep -q gateway_discovery_refresh_total
+printf '%s' "$metrics" | grep -q gateway_discovery_targets
 go run ./examples/grpc-health -check localhost:8080
 printf '%s\n' 'Docker smoke checks passed.'

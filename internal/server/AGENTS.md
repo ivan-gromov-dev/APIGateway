@@ -11,3 +11,8 @@ Public serves proxied traffic only. Admin owns `/healthz`, `/readyz`, `/metrics`
 and `/debug/pprof/*`. Middleware order is observable; keep request ID/logging
 outside recovery so panics remain correlated and counted. Test listener failures,
 readiness, admin isolation, serve failure, active-request drain, and deadlines.
+
+Continuous discovery workers are runtime-snapshot resources. Publish immutable
+handlers, retain target state only within the same route and URL, cancel retired
+refresh/probe contexts, and withdraw readiness when a route exceeds its stale
+grace period.

@@ -17,53 +17,9 @@ defect requires a documented change.
 - **Exploratory**: valuable, but requires a design decision before scheduling;
 - **Out of scope**: intentionally delegated to a mature edge or platform.
 
-## 1.0 baseline
-
-Version 1.0 establishes the supported application-gateway core:
-
-- strict YAML configuration, environment overrides, and transactional reload;
-- longest-prefix HTTP routing, safe retries, per-instance circuit breakers,
-  active health checks, balancing, and controlled rollouts;
-- static and DNS-backed upstream discovery during snapshot construction;
-- transparent gRPC proxying over HTTP/2 without descriptor coupling;
-- JWT/JWKS authentication, Redis-backed rate limiting, and response caching;
-- bounded metrics, structured logs, tracing, profiling, readiness, and graceful
-  shutdown on separate public and administrative listeners;
-- unit, real-network integration, race, per-package coverage, Docker smoke, and
-  manual load-test workflows.
-
-## 1.1 — Continuous discovery and target lifecycle
-
-**Status: Next**
-
-Make discovery independent of configuration-file changes while retaining a
-stable, race-free routing snapshot.
-
-### Deliverables
-
-- refresh DNS routes at their configured `interval`;
-- retain the last valid target set for the configured `grace` period when
-  resolution fails or returns no usable addresses;
-- reconcile added, retained, and removed targets without discarding circuit and
-  health state for unchanged instances;
-- cancel refresh workers and active probes when a runtime snapshot is retired;
-- expose bounded refresh outcome, target-count, and staleness metrics;
-- keep readiness successful while a usable non-expired snapshot exists and
-  define explicit behaviour after grace expires;
-- demonstrate DNS membership changes in integration and Docker scenarios.
-
-### Completion gates
-
-- deterministic tests cover refresh, cancellation, stale retention, grace
-  expiry, address changes, IPv4/IPv6, and concurrent requests;
-- race tests show no mutation of published target slices;
-- invalid discovery configuration still fails before publication;
-- existing static routes remain allocation- and goroutine-free outside their
-  current request path.
-
 ## 1.2 — Resilience budgets and overload protection
 
-**Status: Planned**
+**Status: Next**
 
 Move from isolated retries and circuit thresholds to bounded, coordinated
 resource use under partial failure and overload.

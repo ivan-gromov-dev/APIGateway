@@ -28,6 +28,9 @@ type Collector struct {
 	featureDecisions *prometheus.CounterVec
 	grpcRequests     *prometheus.CounterVec
 	grpcDuration     *prometheus.HistogramVec
+	discoveryRefresh *prometheus.CounterVec
+	discoveryTargets *prometheus.GaugeVec
+	discoveryStale   *prometheus.GaugeVec
 }
 
 func (c *Collector) init() {
@@ -44,11 +47,23 @@ func (c *Collector) init() {
 		c.featureDecisions = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "gateway_feature_decisions_total", Help: "Authentication, cache, and rate-limit decisions."}, []string{"feature", "scope", "name", "result"})
 		c.grpcRequests = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "gateway_grpc_requests_total", Help: "Completed gRPC calls by configured route and gRPC status."}, []string{"route", "grpc_status"})
 		c.grpcDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "gateway_grpc_request_duration_seconds", Help: "gRPC call duration.", Buckets: prometheus.DefBuckets}, []string{"route"})
+		c.discoveryRefresh = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "gateway_discovery_refresh_total", Help: "Discovery refreshes by configured route and bounded outcome."}, []string{"route", "outcome"})
+		c.discoveryTargets = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "gateway_discovery_targets", Help: "Current usable discovered targets by configured route."}, []string{"route"})
+		c.discoveryStale = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "gateway_discovery_staleness_seconds", Help: "Seconds since the last successful discovery refresh."}, []string{"route"})
 		c.registry.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 			c.httpRequests, c.httpDuration, c.httpSize, c.inFlight, c.routeRequests,
-			c.proxyAttempts, c.proxyDuration, c.retries, c.featureDecisions, c.grpcRequests, c.grpcDuration)
+			c.proxyAttempts, c.proxyDuration, c.retries, c.featureDecisions, c.grpcRequests, c.grpcDuration,
+			c.discoveryRefresh, c.discoveryTargets, c.discoveryStale)
 		c.handler = promhttp.HandlerFor(c.registry, promhttp.HandlerOpts{})
 	})
+}
+
+// ObserveDiscovery records a refresh without exposing provider answers as labels.
+func (c *Collector) ObserveDiscovery(route, outcome string, targets int, staleness time.Duration) {
+	c.init()
+	c.discoveryRefresh.WithLabelValues(route, outcome).Inc()
+	c.discoveryTargets.WithLabelValues(route).Set(float64(targets))
+	c.discoveryStale.WithLabelValues(route).Set(staleness.Seconds())
 }
 
 // ObserveGRPC records one completed call using only its configured route label.
