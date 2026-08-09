@@ -4,7 +4,7 @@ All notable changes to this project are documented here. Releases follow
 [Semantic Versioning](https://semver.org/), and the entries below were rebuilt
 from the annotated Git tags and their commit ranges.
 
-## [1.0.0] - Unreleased
+## [1.0.0] - 2026-08-02
 
 First stable release. The configuration and runtime contracts documented in
 the README are now the supported 1.x baseline.

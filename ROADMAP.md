@@ -17,21 +17,6 @@ defect requires a documented change.
 - **Exploratory**: valuable, but requires a design decision before scheduling;
 - **Out of scope**: intentionally delegated to a mature edge or platform.
 
-## 1.0 baseline
-
-Version 1.0 establishes the supported application-gateway core:
-
-- strict YAML configuration, environment overrides, and transactional reload;
-- longest-prefix HTTP routing, safe retries, per-instance circuit breakers,
-  active health checks, balancing, and controlled rollouts;
-- static and DNS-backed upstream discovery during snapshot construction;
-- transparent gRPC proxying over HTTP/2 without descriptor coupling;
-- JWT/JWKS authentication, Redis-backed rate limiting, and response caching;
-- bounded metrics, structured logs, tracing, profiling, readiness, and graceful
-  shutdown on separate public and administrative listeners;
-- unit, real-network integration, race, per-package coverage, Docker smoke, and
-  manual load-test workflows.
-
 ## 1.1 — Continuous discovery and target lifecycle
 
 **Status: Next**

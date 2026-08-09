@@ -1,6 +1,7 @@
 # API Gateway
 
 [![CI](https://github.com/Djunichi/APIGateway/actions/workflows/ci.yml/badge.svg)](https://github.com/Djunichi/APIGateway/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A production-minded HTTP API gateway written in Go. It combines reverse
 proxying, resilience, authentication, distributed rate limiting, response
@@ -514,3 +515,7 @@ Demo client secrets, the Grafana password, disabled Elastic security, and the
 Filebeat Docker socket mount are for local development only. Do not expose the
 Compose stack to an untrusted network or reuse its credentials in another
 environment.
+
+## License
+
+This project is available under the [MIT License](LICENSE).
