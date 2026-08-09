@@ -50,6 +50,31 @@ func TestHandlerObservabilityConstructors(t *testing.T) {
 	}
 }
 
+func TestTargetPoolRetainsStateWithinRouteOnly(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer backend.Close()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	routes := []config.Route{
+		{PathPrefix: "/one/", Upstreams: []string{backend.URL}},
+		{PathPrefix: "/two/", Upstreams: []string{backend.URL}},
+	}
+	_, first, err := HandlerWithObservabilityAndTargetPool(routes, testRetry(), testCircuit(), config.RateLimit{}, nil, nil, config.Cache{}, nil, logger, http.DefaultTransport, nil, &metrics.Collector{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, second, err := HandlerWithObservabilityAndTargetPool(routes, testRetry(), testCircuit(), config.RateLimit{}, nil, nil, config.Cache{}, nil, logger, http.DefaultTransport, nil, &metrics.Collector{}, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oneKey, twoKey := "/one/\x00"+backend.URL, "/two/\x00"+backend.URL
+	if first[oneKey] != second[oneKey] || first[twoKey] != second[twoKey] {
+		t.Fatal("unchanged route targets were not retained")
+	}
+	if second[oneKey] == second[twoKey] {
+		t.Fatal("target state leaked between routes")
+	}
+}
+
 func TestHandlerProxiesAndStripsPrefix(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/hello" {

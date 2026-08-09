@@ -60,7 +60,7 @@ func HandlerWithObservability(routes []config.Route, retry config.Retry, circuit
 	return handlerWithFeaturesAndObservability(routes, retry, circuit, rate, registry, verifiers,
 		cacheConfig, cacheStore, logger, func(upstreams []*upstream.Target) (balancer.Balancer, error) {
 			return balancer.NewRoundRobin(upstreams)
-		}, base, tracer, collector)
+		}, base, tracer, collector, nil, nil, nil)
 }
 
 func HandlerWithObservabilityAndTargets(routes []config.Route, retry config.Retry, circuit config.CircuitBreaker,
@@ -70,7 +70,23 @@ func HandlerWithObservabilityAndTargets(routes []config.Route, retry config.Retr
 	return handlerWithFeaturesAndObservability(routes, retry, circuit, rate, registry, verifiers, cacheConfig, cacheStore, logger,
 		func(upstreams []*upstream.Target) (balancer.Balancer, error) {
 			return balancer.NewRoundRobin(upstreams)
-		}, base, tracer, collector, targets)
+		}, base, tracer, collector, []*[]*upstream.Target{targets}, nil, nil)
+}
+
+// HandlerWithObservabilityAndTargetPool builds a handler while reusing target
+// objects with matching URLs. Reuse preserves circuit-breaker and active-health
+// state across immutable routing snapshots. The returned map is newly allocated.
+func HandlerWithObservabilityAndTargetPool(routes []config.Route, retry config.Retry, circuit config.CircuitBreaker,
+	rate config.RateLimit, registry *ratelimit.Registry, verifiers map[string]*auth.Verifier,
+	cacheConfig config.Cache, cacheStore cache.Store, logger *slog.Logger,
+	base http.RoundTripper, tracer trace.Tracer, collector *metrics.Collector, previous map[string]*upstream.Target,
+) (http.Handler, map[string]*upstream.Target, error) {
+	pool := make(map[string]*upstream.Target)
+	handler, err := handlerWithFeaturesAndObservability(routes, retry, circuit, rate, registry, verifiers,
+		cacheConfig, cacheStore, logger, func(targets []*upstream.Target) (balancer.Balancer, error) {
+			return balancer.NewRoundRobin(targets)
+		}, base, tracer, collector, nil, previous, pool)
+	return handler, pool, err
 }
 
 func normalizedCircuitConfig(circuit config.CircuitBreaker) config.CircuitBreaker {
@@ -123,14 +139,15 @@ func handlerWithFeaturesAndTelemetry(
 	newBalancer balancer.Factory, base http.RoundTripper, tracer trace.Tracer,
 ) (http.Handler, error) {
 	return handlerWithFeaturesAndObservability(routes, retry, circuit, rate, registry, verifiers,
-		cacheConfig, cacheStore, logger, newBalancer, base, tracer, nil)
+		cacheConfig, cacheStore, logger, newBalancer, base, tracer, nil, nil, nil, nil)
 }
 
 func handlerWithFeaturesAndObservability(
 	routes []config.Route, retry config.Retry, circuit config.CircuitBreaker,
 	rate config.RateLimit, registry *ratelimit.Registry, verifiers map[string]*auth.Verifier,
 	cacheConfig config.Cache, cacheStore cache.Store, logger *slog.Logger,
-	newBalancer balancer.Factory, base http.RoundTripper, tracer trace.Tracer, collector *metrics.Collector, sinks ...*[]*upstream.Target,
+	newBalancer balancer.Factory, base http.RoundTripper, tracer trace.Tracer, collector *metrics.Collector,
+	sinks []*[]*upstream.Target, previous, pool map[string]*upstream.Target,
 ) (http.Handler, error) {
 	if newBalancer == nil {
 		return nil, fmt.Errorf("balancer factory is required")
@@ -140,9 +157,17 @@ func handlerWithFeaturesAndObservability(
 	for _, route := range routes {
 		targets := make([]*upstream.Target, 0, len(route.Upstreams))
 		for _, rawTarget := range route.Upstreams {
+			targetKey := route.PathPrefix + "\x00" + rawTarget
 			targetURL, err := url.Parse(rawTarget)
 			if err != nil {
 				return nil, fmt.Errorf("parse upstream %q: %w", rawTarget, err)
+			}
+			if existing := previous[targetKey]; existing != nil {
+				targets = append(targets, existing)
+				if pool != nil {
+					pool[targetKey] = existing
+				}
+				continue
 			}
 			breaker, err := circuitbreaker.New(circuitbreaker.Config{
 				FailureThreshold: circuit.FailureThreshold,
@@ -156,6 +181,9 @@ func handlerWithFeaturesAndObservability(
 				return nil, fmt.Errorf("create upstream %q: %w", rawTarget, err)
 			}
 			targets = append(targets, target)
+			if pool != nil {
+				pool[targetKey] = target
+			}
 		}
 		for _, sink := range sinks {
 			if sink != nil {

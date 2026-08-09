@@ -21,7 +21,7 @@ $users = Invoke-WebRequest -UseBasicParsing -Uri "$BaseURL/api/users" -Headers @
 if ($users.StatusCode -ne 200) { throw "authenticated users request failed" }
 
 $metrics = (Assert-Status "$AdminURL/metrics").Content
-foreach ($metric in @("gateway_http_requests_total", "gateway_feature_decisions_total")) {
+foreach ($metric in @("gateway_http_requests_total", "gateway_feature_decisions_total", "gateway_discovery_refresh_total", "gateway_discovery_targets")) {
     if (-not $metrics.Contains($metric)) { throw "metric $metric was not exported" }
 }
 go run ./examples/grpc-health -check localhost:8080

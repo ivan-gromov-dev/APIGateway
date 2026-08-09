@@ -4,6 +4,22 @@ All notable changes to this project are documented here. Releases follow
 [Semantic Versioning](https://semver.org/), and the entries below were rebuilt
 from the annotated Git tags and their commit ranges.
 
+## [1.1.0] - 2026-08-09
+
+### Added
+
+- continuous per-route DNS refresh using the existing `interval` and `grace`
+  configuration contract;
+- bounded discovery refresh, target-count, and staleness metrics;
+- readiness and route-level `503` behaviour after a discovered snapshot expires.
+
+### Changed
+
+- DNS answers are deduplicated and sorted before immutable publication;
+- unchanged upstream targets retain circuit-breaker and active-health state
+  across membership updates;
+- configuration reload and shutdown retire refresh workers and active probes.
+
 ## [1.0.0] - 2026-08-02
 
 First stable release. The configuration and runtime contracts documented in
@@ -86,6 +102,7 @@ the README are now the supported 1.x baseline.
   real-network integration tests.
 
 [1.0.0]: https://github.com/Djunichi/APIGateway/compare/v0.6.0...v1.0.0
+[1.1.0]: https://github.com/Djunichi/APIGateway/compare/v1.0.0...v1.1.0
 [0.6.0]: https://github.com/Djunichi/APIGateway/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Djunichi/APIGateway/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Djunichi/APIGateway/compare/v0.3.0...v0.4.0

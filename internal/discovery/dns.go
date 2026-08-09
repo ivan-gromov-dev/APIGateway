@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 
 	"github.com/Djunichi/APIGateway/internal/config"
@@ -29,9 +30,16 @@ func (d DNS) Resolve(ctx context.Context, cfg config.Discovery) ([]string, error
 		return nil, fmt.Errorf("resolve %q returned no addresses", cfg.Name)
 	}
 	result := make([]string, 0, len(hosts))
+	seen := make(map[string]struct{}, len(hosts))
 	for _, host := range hosts {
 		u := url.URL{Scheme: cfg.Scheme, Host: net.JoinHostPort(host, strconv.Itoa(cfg.Port))}
-		result = append(result, u.String())
+		value := u.String()
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
 	}
+	sort.Strings(result)
 	return result, nil
 }

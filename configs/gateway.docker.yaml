@@ -109,12 +109,6 @@ routes:
       interval: 30s
       grace: 2m
     strip_prefix: true
-    balancer: weighted_round_robin
-    weights: [9, 1, 1]
-    rollout:
-      strategy: stable_hash
-      percentage: 10
-      stable_hash: X-User-ID
     auth:
       required: true
       provider: demo
