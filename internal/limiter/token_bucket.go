@@ -5,7 +5,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/ratelimit"
+	"github.com/ivan-gromov-dev/APIGateway/internal/ratelimit"
 )
 
 type TokenBucket struct {

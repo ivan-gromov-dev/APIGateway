@@ -11,7 +11,7 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
-	"github.com/Djunichi/APIGateway/internal/cache"
+	"github.com/ivan-gromov-dev/APIGateway/internal/cache"
 )
 
 type Config struct {

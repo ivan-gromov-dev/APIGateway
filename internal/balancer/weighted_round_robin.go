@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/upstream"
+	"github.com/ivan-gromov-dev/APIGateway/internal/upstream"
 )
 
 // WeightedRoundRobin selects targets in a smooth weighted cycle. Weights are

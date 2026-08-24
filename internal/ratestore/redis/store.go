@@ -10,7 +10,7 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
-	"github.com/Djunichi/APIGateway/internal/ratelimit"
+	"github.com/ivan-gromov-dev/APIGateway/internal/ratelimit"
 )
 
 type Config struct {

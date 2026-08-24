@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/balancer"
-	"github.com/Djunichi/APIGateway/internal/circuitbreaker"
-	"github.com/Djunichi/APIGateway/internal/config"
-	"github.com/Djunichi/APIGateway/internal/metrics"
-	"github.com/Djunichi/APIGateway/internal/ratelimit"
-	upstreammodel "github.com/Djunichi/APIGateway/internal/upstream"
+	"github.com/ivan-gromov-dev/APIGateway/internal/balancer"
+	"github.com/ivan-gromov-dev/APIGateway/internal/circuitbreaker"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/internal/metrics"
+	"github.com/ivan-gromov-dev/APIGateway/internal/ratelimit"
+	upstreammodel "github.com/ivan-gromov-dev/APIGateway/internal/upstream"
 )
 
 func TestHandlerObservabilityConstructors(t *testing.T) {

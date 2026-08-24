@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Djunichi/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
 )
 
 // CORS handles simple and preflight cross-origin requests.

@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/config"
-	"github.com/Djunichi/APIGateway/internal/upstream"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/internal/upstream"
 )
 
 // Rollout selects the final upstream as a canary according to a bounded

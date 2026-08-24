@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/circuitbreaker"
-	"github.com/Djunichi/APIGateway/internal/upstream"
+	"github.com/ivan-gromov-dev/APIGateway/internal/circuitbreaker"
+	"github.com/ivan-gromov-dev/APIGateway/internal/upstream"
 )
 
 func TestNewRoundRobinRequiresUpstream(t *testing.T) {

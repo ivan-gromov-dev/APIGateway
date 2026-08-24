@@ -5,8 +5,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/circuitbreaker"
-	"github.com/Djunichi/APIGateway/internal/upstream"
+	"github.com/ivan-gromov-dev/APIGateway/internal/circuitbreaker"
+	"github.com/ivan-gromov-dev/APIGateway/internal/upstream"
 )
 
 // Selection binds an available target to its circuit breaker completion callback.

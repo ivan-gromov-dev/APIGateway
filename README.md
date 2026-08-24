@@ -1,6 +1,6 @@
 # API Gateway
 
-[![CI](https://github.com/Djunichi/APIGateway/actions/workflows/ci.yml/badge.svg)](https://github.com/Djunichi/APIGateway/actions/workflows/ci.yml)
+[![CI](https://github.com/ivan-gromov-dev/APIGateway/actions/workflows/ci.yml/badge.svg)](https://github.com/ivan-gromov-dev/APIGateway/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A production-minded HTTP API gateway written in Go. It combines reverse

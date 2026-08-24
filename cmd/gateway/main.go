@@ -10,10 +10,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/Djunichi/APIGateway/internal/config"
-	"github.com/Djunichi/APIGateway/internal/configwatcher"
-	"github.com/Djunichi/APIGateway/internal/logger"
-	"github.com/Djunichi/APIGateway/internal/server"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/internal/configwatcher"
+	"github.com/ivan-gromov-dev/APIGateway/internal/logger"
+	"github.com/ivan-gromov-dev/APIGateway/internal/server"
 )
 
 func main() {

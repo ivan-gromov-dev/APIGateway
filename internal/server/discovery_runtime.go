@@ -6,10 +6,10 @@ import (
 	"slices"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/auth"
-	"github.com/Djunichi/APIGateway/internal/config"
-	"github.com/Djunichi/APIGateway/internal/healthcheck"
-	"github.com/Djunichi/APIGateway/internal/upstream"
+	"github.com/ivan-gromov-dev/APIGateway/internal/auth"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/internal/healthcheck"
+	"github.com/ivan-gromov-dev/APIGateway/internal/upstream"
 )
 
 func (s *Server) startDiscovery(_ context.Context, verifiers map[string]*auth.Verifier) {

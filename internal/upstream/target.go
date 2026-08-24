@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/circuitbreaker"
+	"github.com/ivan-gromov-dev/APIGateway/internal/circuitbreaker"
 )
 
 // Target is one configured upstream instance with an independent circuit breaker.

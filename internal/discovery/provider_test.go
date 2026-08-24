@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Djunichi/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
 )
 
 func TestRegistrySelectsProvider(t *testing.T) {

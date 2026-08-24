@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/cache"
-	"github.com/Djunichi/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/internal/cache"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
 )
 
 type memoryCache struct {

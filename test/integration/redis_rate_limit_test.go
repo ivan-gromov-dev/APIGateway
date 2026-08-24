@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/ratelimit"
-	redisstore "github.com/Djunichi/APIGateway/internal/ratestore/redis"
+	"github.com/ivan-gromov-dev/APIGateway/internal/ratelimit"
+	redisstore "github.com/ivan-gromov-dev/APIGateway/internal/ratestore/redis"
 )
 
 func TestRedisTokenBucketIsAtomic(t *testing.T) {

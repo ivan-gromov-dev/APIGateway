@@ -17,11 +17,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/cache"
-	"github.com/Djunichi/APIGateway/internal/config"
-	"github.com/Djunichi/APIGateway/internal/ratelimit"
-	"github.com/Djunichi/APIGateway/internal/server"
-	"github.com/Djunichi/APIGateway/internal/telemetry"
+	"github.com/ivan-gromov-dev/APIGateway/internal/cache"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/internal/ratelimit"
+	"github.com/ivan-gromov-dev/APIGateway/internal/server"
+	"github.com/ivan-gromov-dev/APIGateway/internal/telemetry"
 )
 
 // Option configures an integration environment.

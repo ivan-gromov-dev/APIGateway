@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/Djunichi/APIGateway/test/integration/internal/testenv"
+	"github.com/ivan-gromov-dev/APIGateway/test/integration/internal/testenv"
 )
 
 func TestOperationalEndpointsAndGracefulStop(t *testing.T) {
