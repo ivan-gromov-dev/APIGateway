@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/circuitbreaker"
+	"github.com/ivan-gromov-dev/APIGateway/internal/circuitbreaker"
 )
 
 func TestTargetCopiesURLAndDelegatesCircuitState(t *testing.T) {

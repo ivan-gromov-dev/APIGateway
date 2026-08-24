@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/Djunichi/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
 )
 
 // New creates a logger that writes to standard output.

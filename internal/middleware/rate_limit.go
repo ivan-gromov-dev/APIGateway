@@ -9,10 +9,10 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/Djunichi/APIGateway/internal/config"
-	"github.com/Djunichi/APIGateway/internal/limiter"
-	"github.com/Djunichi/APIGateway/internal/metrics"
-	"github.com/Djunichi/APIGateway/internal/ratelimit"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/internal/limiter"
+	"github.com/ivan-gromov-dev/APIGateway/internal/metrics"
+	"github.com/ivan-gromov-dev/APIGateway/internal/ratelimit"
 )
 
 type rateRule struct {

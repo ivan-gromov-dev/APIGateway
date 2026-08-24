@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/ratelimit"
+	"github.com/ivan-gromov-dev/APIGateway/internal/ratelimit"
 )
 
 func TestTakeMapsScriptResult(t *testing.T) {

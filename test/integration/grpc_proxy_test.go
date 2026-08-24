@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/config"
-	"github.com/Djunichi/APIGateway/test/integration/internal/testenv"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/test/integration/internal/testenv"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"

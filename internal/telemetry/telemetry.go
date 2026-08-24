@@ -15,7 +15,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-const instrumentationName = "github.com/Djunichi/APIGateway"
+const instrumentationName = "github.com/ivan-gromov-dev/APIGateway"
 
 // Config describes optional OTLP trace export.
 type Config struct {

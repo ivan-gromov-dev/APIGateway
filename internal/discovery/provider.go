@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Djunichi/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
 )
 
 // Provider resolves one configured discovery target into HTTP upstream URLs.

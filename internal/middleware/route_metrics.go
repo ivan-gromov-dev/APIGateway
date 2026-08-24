@@ -3,7 +3,7 @@ package middleware
 import (
 	"net/http"
 
-	"github.com/Djunichi/APIGateway/internal/metrics"
+	"github.com/ivan-gromov-dev/APIGateway/internal/metrics"
 )
 
 // RouteMetrics records status counts using the configured route prefix.

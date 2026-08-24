@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/ratelimit"
+	"github.com/ivan-gromov-dev/APIGateway/internal/ratelimit"
 )
 
 func TestTokenBucketPassesPolicyToStore(t *testing.T) {

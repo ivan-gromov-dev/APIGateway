@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/circuitbreaker"
-	"github.com/Djunichi/APIGateway/internal/config"
-	"github.com/Djunichi/APIGateway/internal/upstream"
+	"github.com/ivan-gromov-dev/APIGateway/internal/circuitbreaker"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/internal/upstream"
 )
 
 func TestCheckerRecordsHealthAfterThresholds(t *testing.T) {

@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/Djunichi/APIGateway/internal/config"
-	"github.com/Djunichi/APIGateway/test/integration/internal/testenv"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/test/integration/internal/testenv"
 )
 
 func TestRoundRobinAcrossUsersInstances(t *testing.T) {

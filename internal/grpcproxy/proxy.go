@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/config"
-	"github.com/Djunichi/APIGateway/internal/metrics"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/internal/metrics"
 	"golang.org/x/net/http2"
 )
 

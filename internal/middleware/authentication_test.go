@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Djunichi/APIGateway/internal/auth"
+	"github.com/ivan-gromov-dev/APIGateway/internal/auth"
 )
 
 type fakeAuthenticator struct {

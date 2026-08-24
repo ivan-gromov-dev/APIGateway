@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/config"
-	"github.com/Djunichi/APIGateway/internal/upstream"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/internal/upstream"
 )
 
 type Checker struct {

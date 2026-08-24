@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Djunichi/APIGateway/internal/auth"
-	"github.com/Djunichi/APIGateway/internal/metrics"
+	"github.com/ivan-gromov-dev/APIGateway/internal/auth"
+	"github.com/ivan-gromov-dev/APIGateway/internal/metrics"
 )
 
 type Authenticator interface {

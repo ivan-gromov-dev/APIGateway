@@ -16,9 +16,9 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/Djunichi/APIGateway/internal/cache"
-	"github.com/Djunichi/APIGateway/internal/config"
-	"github.com/Djunichi/APIGateway/test/integration/internal/testenv"
+	"github.com/ivan-gromov-dev/APIGateway/internal/cache"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/test/integration/internal/testenv"
 )
 
 func TestJWTAuthenticationProtectsRoute(t *testing.T) {

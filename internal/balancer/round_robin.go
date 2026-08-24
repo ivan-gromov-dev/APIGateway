@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/upstream"
+	"github.com/ivan-gromov-dev/APIGateway/internal/upstream"
 )
 
 // RoundRobin selects upstreams sequentially and is safe for concurrent use.

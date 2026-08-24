@@ -10,9 +10,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Djunichi/APIGateway/internal/cache"
-	"github.com/Djunichi/APIGateway/internal/config"
-	"github.com/Djunichi/APIGateway/internal/metrics"
+	"github.com/ivan-gromov-dev/APIGateway/internal/cache"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/internal/metrics"
 )
 
 func ResponseCache(store cache.Store, global config.Cache, route config.RouteCache, routePrefix string) Middleware {

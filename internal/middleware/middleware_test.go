@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Djunichi/APIGateway/internal/config"
-	"github.com/Djunichi/APIGateway/internal/metrics"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/internal/metrics"
 	"go.opentelemetry.io/otel/trace"
 )
 

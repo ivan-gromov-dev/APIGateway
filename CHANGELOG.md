@@ -101,11 +101,11 @@ the README are now the supported 1.x baseline.
 - separate public and admin listeners, Docker Compose demos, and unit and
   real-network integration tests.
 
-[1.0.0]: https://github.com/Djunichi/APIGateway/compare/v0.6.0...v1.0.0
-[1.1.0]: https://github.com/Djunichi/APIGateway/compare/v1.0.0...v1.1.0
-[0.6.0]: https://github.com/Djunichi/APIGateway/compare/v0.5.0...v0.6.0
-[0.5.0]: https://github.com/Djunichi/APIGateway/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/Djunichi/APIGateway/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/Djunichi/APIGateway/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/Djunichi/APIGateway/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/Djunichi/APIGateway/releases/tag/v0.1.0
+[1.0.0]: https://github.com/ivan-gromov-dev/APIGateway/compare/v0.6.0...v1.0.0
+[1.1.0]: https://github.com/ivan-gromov-dev/APIGateway/compare/v1.0.0...v1.1.0
+[0.6.0]: https://github.com/ivan-gromov-dev/APIGateway/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/ivan-gromov-dev/APIGateway/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/ivan-gromov-dev/APIGateway/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/ivan-gromov-dev/APIGateway/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/ivan-gromov-dev/APIGateway/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/ivan-gromov-dev/APIGateway/releases/tag/v0.1.0

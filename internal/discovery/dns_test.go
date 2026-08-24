@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Djunichi/APIGateway/internal/config"
+	"github.com/ivan-gromov-dev/APIGateway/internal/config"
 )
 
 func TestDNSResolvesAddresses(t *testing.T) {

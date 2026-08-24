@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/Djunichi/APIGateway/internal/telemetry"
-	"github.com/Djunichi/APIGateway/test/integration/internal/testenv"
+	"github.com/ivan-gromov-dev/APIGateway/internal/telemetry"
+	"github.com/ivan-gromov-dev/APIGateway/test/integration/internal/testenv"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )

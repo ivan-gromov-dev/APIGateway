@@ -1,4 +1,4 @@
-module github.com/Djunichi/APIGateway
+module github.com/ivan-gromov-dev/APIGateway
 
 go 1.26
 
