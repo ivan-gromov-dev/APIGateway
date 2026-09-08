@@ -1,4 +1,0 @@
-interface:
-  display_name: "Review API Gateway"
-  short_description: "Review gateway changes against project rules"
-  default_prompt: "Use $review-api-gateway to review my current changes and report prioritized findings."
