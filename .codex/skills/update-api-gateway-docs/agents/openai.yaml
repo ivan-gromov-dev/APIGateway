@@ -1,4 +1,0 @@
-interface:
-  display_name: "Update API Gateway Docs"
-  short_description: "Synchronize repository docs and release status"
-  default_prompt: "Use $update-api-gateway-docs to synchronize all documentation with the current repository and close the active release milestone."
